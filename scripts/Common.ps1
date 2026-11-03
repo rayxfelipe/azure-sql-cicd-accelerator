@@ -80,6 +80,20 @@ function Assert-SetupVerificationJobs {
     }
 }
 
+function Assert-NoActiveReleaseRuns {
+    param([string] $Repository)
+    foreach ($status in @('in_progress', 'queued', 'waiting', 'pending', 'requested')) {
+        $runs = Invoke-GithubApi "repos/$Repository/actions/runs?status=$status&per_page=100"
+        if ($runs.total_count -gt 100) { throw 'Cannot verify quiescent releases from a truncated workflow list.' }
+        $active = @($runs.workflow_runs | Where-Object {
+            $_.head_branch -eq 'main' -and $_.path -in @('.github/workflows/database-ci.yml', '.github/workflows/promote-production.yml')
+        })
+        if ($active.Count -gt 0) {
+            throw "Wait for or cancel active main-branch CI/promotion before changing infrastructure: $($active[0].html_url)"
+        }
+    }
+}
+
 function Read-SetupConfiguration {
     param([string] $Path)
     $config = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json

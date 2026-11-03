@@ -69,6 +69,7 @@ Set-GithubVariable $config.repository 'SETUP_COMPLETE' 'false'
 Set-GithubVariable $config.repository 'SETUP_IN_PROGRESS' 'true'
 $completed = $false
 try {
+    Assert-NoActiveReleaseRuns $config.repository
     $environmentList = Invoke-GithubApi "repos/$($config.repository)/environments?per_page=100"
     foreach ($environmentName in @('dev', 'production')) {
         $existing = @($environmentList.environments | Where-Object name -eq $environmentName)

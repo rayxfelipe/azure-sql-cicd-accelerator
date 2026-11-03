@@ -109,6 +109,8 @@ environments. It does not replace mismatched SQL users or foreign runners.
 Changing saved configuration is rejected to prevent unintended replacements.
 
 A failed setup leaves deployments disabled but can leave billable resources.
+Apply and cleanup refuse active/queued/waiting main-branch CI and promotion
+runs; finish or deliberately cancel those runs before infrastructure changes.
 Read the reported error, fix it and rerun. Verification waits at most 30 minutes;
 check environment approvals, runner status and the linked workflow if it times
 out. A missing/stale GitHub runner registration requires deliberate runner

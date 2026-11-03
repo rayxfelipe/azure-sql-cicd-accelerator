@@ -103,6 +103,27 @@ $verificationJobs[3].conclusion = 'skipped'
 Assert-Throws { Assert-SetupVerificationJobs $verificationJobs } 'did not succeed' 'Skipped production readiness cannot enable deployments'
 Assert-Throws { Assert-SetupVerificationJobs @() } 'did not succeed' 'Entirely skipped workflow cannot enable deployments'
 
+$originalApi = ${function:Invoke-GithubApi}
+$script:activeRuns = @()
+function Invoke-GithubApi {
+    param([string] $Path, [string] $Method = 'GET', [object] $Body)
+    [pscustomobject]@{ total_count = $script:activeRuns.Count; workflow_runs = $script:activeRuns }
+}
+try {
+    Assert-NoActiveReleaseRuns 'owner/adopter'
+    Assert-Test $true 'Idle releases allow setup and cleanup'
+    $script:activeRuns = @([pscustomobject]@{
+        head_branch = 'main'; path = '.github/workflows/promote-production.yml'; html_url = 'https://github.com/owner/adopter/actions/runs/123'
+    })
+    Assert-Throws { Assert-NoActiveReleaseRuns 'owner/adopter' } 'active main-branch' 'Active production promotion blocks infrastructure changes'
+    $script:activeRuns[0].path = '.github/workflows/database-ci.yml'
+    Assert-Throws { Assert-NoActiveReleaseRuns 'owner/adopter' } 'active main-branch' 'Active dev CI blocks infrastructure changes'
+    $script:activeRuns[0].head_branch = 'feature'
+    Assert-NoActiveReleaseRuns 'owner/adopter'
+    Assert-Test $true 'Credential-free feature PR build does not block infrastructure changes'
+}
+finally { Set-Item -Path function:Invoke-GithubApi -Value $originalApi }
+
 $originalNative = ${function:Invoke-CheckedCommand}
 $script:nativeCalls = @()
 function Invoke-CheckedCommand {

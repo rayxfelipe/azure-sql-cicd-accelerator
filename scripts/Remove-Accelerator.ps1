@@ -14,6 +14,7 @@ Invoke-CheckedCommand az @('resource', 'list', '--subscription', $config.subscri
 if (-not $Apply) { Write-Host 'Preview only. -Apply permanently deletes this accelerator resource group and ALL its data. Export required data first.'; return }
 Set-GithubVariable $config.repository 'SETUP_COMPLETE' 'false'
 Set-GithubVariable $config.repository 'SETUP_IN_PROGRESS' 'false'
+Assert-NoActiveReleaseRuns $config.repository
 $repo = Invoke-GithubApi "repos/$($config.repository)"
 $runnerName = "sql-$($repo.id)-$($config.resourcePrefix)"
 $runners = Invoke-GithubApi "repos/$($config.repository)/actions/runners?per_page=100"
