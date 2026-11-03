@@ -1,0 +1,84 @@
+name: Promote verified database to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful main-branch Database CI run ID with a successful dev deployment
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  validate-source:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    outputs:
+      run-id: ${{ steps.validate.outputs.run-id }}
+      artifact-id: ${{ steps.validate.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require completed setup
+        shell: pwsh
+        env:
+          SETUP_COMPLETE: ${{ vars.SETUP_COMPLETE }}
+          SETUP_IN_PROGRESS: ${{ vars.SETUP_IN_PROGRESS }}
+        run: |
+          if ($env:SETUP_COMPLETE -ne 'true' -or $env:SETUP_IN_PROGRESS -eq 'true') {
+            throw 'Setup is not complete; production promotion is disabled.'
+          }
+      - name: Verify trusted source, dev job and unexpired artifact
+        id: validate
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: ./scripts/Test-ReleaseSource.ps1 -Repository $env:GITHUB_REPOSITORY -SourceRunId $env:SOURCE_RUN_ID
+  deploy-production:
+    if: vars.SETUP_COMPLETE == 'true' && vars.SETUP_IN_PROGRESS != 'true'
+    needs: validate-source
+    runs-on: [self-hosted, linux, x64, "${{ vars.RUNNER_LABEL }}"]
+    environment: production
+    timeout-minutes: 30
+    concurrency:
+      group: sql-production-deployment
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.validate-source.outputs.artifact-id }}
+          merge-multiple: true
+          path: package
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.validate-source.outputs.run-id }}
+      - name: Install pinned SqlPackage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          dotnet tool install microsoft.sqlpackage --version 170.4.83 --tool-path (Join-Path $env:RUNNER_TEMP 'sqlpackage')
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy exact dev artifact and run SQL smoke tests
+        shell: pwsh
+        env:
+          SQL_SERVER_FQDN: ${{ vars.SQL_SERVER_FQDN }}
+          SQL_DATABASE_NAME: ${{ vars.SQL_DATABASE_NAME }}
+          SQL_DEPLOYMENT_USER: ${{ vars.SQL_DEPLOYMENT_USER }}
+          SQL_PRIVATE_ENDPOINT_CIDR: ${{ vars.SQL_PRIVATE_ENDPOINT_CIDR }}
+        run: |
+          & ./package/scripts/Deploy-Database.ps1 `
+            -ServerFqdn $env:SQL_SERVER_FQDN -Database $env:SQL_DATABASE_NAME `
+            -ExpectedUser $env:SQL_DEPLOYMENT_USER -PrivateEndpointCidr $env:SQL_PRIVATE_ENDPOINT_CIDR `
+            -Dacpac (Join-Path $pwd 'package/Database.dacpac') `
+            -SqlPackage (Join-Path $env:RUNNER_TEMP 'sqlpackage/sqlpackage')

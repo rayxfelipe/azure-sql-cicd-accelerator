@@ -1,0 +1,87 @@
+name: Database CI and dev deployment
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - database/**
+      - tests/**
+      - scripts/**
+      - infra/**
+      - config/**
+      - .github/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Validate accelerator and build SQL project
+        shell: pwsh
+        run: ./scripts/Test-Accelerator.ps1
+      - name: Package immutable release
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path package
+          Copy-Item database/bin/Release/Database.dacpac package/
+          Copy-Item scripts,tests -Destination package -Recurse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: database-release
+          path: package
+          retention-days: 14
+          if-no-files-found: error
+      - name: Explain setup gate
+        if: vars.SETUP_COMPLETE != 'true' || vars.SETUP_IN_PROGRESS == 'true'
+        shell: pwsh
+        run: "'Build passed. Azure deployment is disabled until guided setup verifies both environments.' >> $env:GITHUB_STEP_SUMMARY"
+  deploy-dev:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.SETUP_COMPLETE == 'true' && vars.SETUP_IN_PROGRESS != 'true'
+    needs: build
+    runs-on: [self-hosted, linux, x64, "${{ vars.RUNNER_LABEL }}"]
+    environment: dev
+    timeout-minutes: 30
+    concurrency:
+      group: sql-dev-deployment
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: database-release
+          path: package
+      - name: Install pinned SqlPackage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          dotnet tool install microsoft.sqlpackage --version 170.4.83 --tool-path (Join-Path $env:RUNNER_TEMP 'sqlpackage')
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Deploy dev and run SQL smoke tests
+        shell: pwsh
+        env:
+          SQL_SERVER_FQDN: ${{ vars.SQL_SERVER_FQDN }}
+          SQL_DATABASE_NAME: ${{ vars.SQL_DATABASE_NAME }}
+          SQL_DEPLOYMENT_USER: ${{ vars.SQL_DEPLOYMENT_USER }}
+          SQL_PRIVATE_ENDPOINT_CIDR: ${{ vars.SQL_PRIVATE_ENDPOINT_CIDR }}
+        run: |
+          & ./package/scripts/Deploy-Database.ps1 `
+            -ServerFqdn $env:SQL_SERVER_FQDN -Database $env:SQL_DATABASE_NAME `
+            -ExpectedUser $env:SQL_DEPLOYMENT_USER -PrivateEndpointCidr $env:SQL_PRIVATE_ENDPOINT_CIDR `
+            -Dacpac (Join-Path $pwd 'package/Database.dacpac') `
+            -SqlPackage (Join-Path $env:RUNNER_TEMP 'sqlpackage/sqlpackage')

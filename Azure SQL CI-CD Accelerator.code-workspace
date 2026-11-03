@@ -1,0 +1,15 @@
+{
+  "folders": [{ "path": "." }],
+  "settings": {
+    "files.exclude": { "**/bin": true, "**/obj": true },
+    "files.eol": "\n"
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-mssql.sql-database-projects-vscode",
+      "ms-azuretools.vscode-bicep",
+      "ms-vscode.powershell",
+      "github.vscode-github-actions"
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+.azure/
+.tools/
+config/setup.json
+*.publish.xml
+*.dacpac
+*.bacpac
+*.pem
+*.key
+*.log

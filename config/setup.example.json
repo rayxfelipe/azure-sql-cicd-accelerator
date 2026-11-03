@@ -1,0 +1,15 @@
+{
+  "subscriptionId": "00000000-0000-0000-0000-000000000000",
+  "repository": "YOUR-OWNER/YOUR-PRIVATE-REPOSITORY",
+  "location": "westus2",
+  "resourceGroupName": "rg-sqlcicd-accelerator",
+  "resourcePrefix": "sqlcicd",
+  "administratorObjectId": "00000000-0000-0000-0000-000000000000",
+  "administratorLogin": "YOUR-ENTRA-ADMINISTRATOR",
+  "administratorPrincipalType": "User",
+  "runnerVmSize": "Standard_B2s_v2",
+  "runnerAdminUsername": "runneradmin",
+  "vnetAddressPrefix": "10.90.0.0/16",
+  "runnerSubnetPrefix": "10.90.1.0/24",
+  "privateEndpointSubnetPrefix": "10.90.2.0/24"
+}
