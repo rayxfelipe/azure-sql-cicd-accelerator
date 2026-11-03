@@ -12,6 +12,9 @@ explicit readiness evidence and protected Run Command cleanup; builds the SQL
 project with warnings treated as errors; and compiles the full Bicep topology.
 It also parses readiness/smoke SQL using the SQL project's existing ScriptDom
 dependency and checks private-network/Entra controls in the compiled ARM template.
+Failure-path tests also cover preserved rerun metadata, simultaneous execution
+and cleanup errors, Azure deletion failures, checkpointed GitHub cleanup retries,
+replacement runners, and mismatched cleanup targets without calling live services.
 
 For workflow syntax/expression validation, run [actionlint](https://github.com/rhysd/actionlint)
 against all three workflows. Optional infrastructure security scanners such as
@@ -62,13 +65,13 @@ Verified November 2, 2026:
 
 | Check | Result |
 |---|---|
-| Accelerator regression tests | 44 passed, including isolation, promotion, readiness, active-release guards and Run Command cleanup. |
+| Accelerator regression tests | 82 passed, including preserved rerun metadata, cleanup ordering/retries, exact runner IDs, and primary/secondary failure reporting. |
 | DACPAC build | Succeeded; zero warnings/errors. |
 | PowerShell, workspace/config JSON and readiness/smoke SQL syntax | Passed. |
 | Full Bicep compilation and compiled private-network/Entra invariants | Passed, exit 0. |
 | Three workflows with actionlint 1.7.12; runner Bash syntax | Passed, exit 0. |
 | Fresh clone from the private accelerator repository | Local validation passed; no baseline metadata or local state packaged. |
-| [Hosted credential-free CI](https://github.com/rayxfelipe/azure-sql-cicd-accelerator/actions/runs/41568749901) | Build passed; dev deployment was skipped because setup is incomplete. |
+| [Initial hosted credential-free CI](https://github.com/rayxfelipe/azure-sql-cicd-accelerator/actions/runs/41568749901) | Build passed; dev deployment was skipped because setup is incomplete. |
 | Baseline | Original revision and clean working tree retained unchanged. |
 | Checkov | Not installed; no Checkov scan is claimed. |
 | New Azure provisioning / live SQL deployment / end-to-end adoption | Not executed. Requires an isolated adopter environment and explicit setup apply. |

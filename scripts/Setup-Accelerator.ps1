@@ -64,7 +64,7 @@ Write-Host 'Preview includes two SQL databases, a private runner VM, NAT gateway
 Invoke-CheckedCommand az (@('deployment', 'sub', 'what-if') + $deploymentArguments)
 if (-not $Apply) { Write-Host 'Preview only. Review permissions and cost, then rerun with -Apply to provision and configure CI/CD.'; return }
 
-@{ configuration = $config; complete = $false } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $statePath
+Update-SetupState $statePath @{ configuration = $config; complete = $false }
 Set-GithubVariable $config.repository 'SETUP_COMPLETE' 'false'
 Set-GithubVariable $config.repository 'SETUP_IN_PROGRESS' 'true'
 $completed = $false
@@ -119,8 +119,7 @@ try {
             SQL_PRIVATE_ENDPOINT_CIDR = $configuration.privateEndpointSubnetPrefix
         }.GetEnumerator()) { Set-GithubVariable $config.repository $entry.Key $entry.Value $target.name }
     }
-    @{ configuration = $config; deployment = $configuration; repositoryId = $repo.id; runnerName = $runnerName; complete = $false } |
-        ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $statePath
+    Update-SetupState $statePath @{ configuration = $config; deployment = $configuration; repositoryId = $repo.id; runnerName = $runnerName; complete = $false }
     $null = Invoke-CheckedCommand az @('vm', 'start', '--subscription', $config.subscriptionId, '--resource-group', $configuration.resourceGroup, '--name', $configuration.runnerVm, '--output', 'none')
     $registration = Invoke-GithubApi "repos/$($config.repository)/actions/runners/registration-token" POST
     try {
@@ -151,9 +150,8 @@ pwsh -NoProfile -File "`$file" -ConfigurationBase64 '$configurationBase64'
     $verification = Invoke-WorkflowAndWait $config.repository 'verify-setup.yml'
     Set-GithubVariable $config.repository 'SETUP_COMPLETE' 'true'
     $completed = $true
-    @{ configuration = $config; deployment = $configuration; repositoryId = $repo.id; runnerName = $runnerName
-        complete = $true; verificationUrl = $verification.html_url } |
-        ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $statePath
+    Update-SetupState $statePath @{ configuration = $config; deployment = $configuration; repositoryId = $repo.id; runnerName = $runnerName
+        complete = $true; verificationUrl = $verification.html_url }
     Write-Host "Setup verified: $($verification.html_url). Dev deployments and production promotion are now enabled."
 }
 finally {

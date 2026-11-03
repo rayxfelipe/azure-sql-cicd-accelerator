@@ -107,6 +107,9 @@ key pair. Setup upserts variables/grants, reuses correctly owned resources,
 preserves the registered runner and resumes partially created main-only
 environments. It does not replace mismatched SQL users or foreign runners.
 Changing saved configuration is rejected to prevent unintended replacements.
+Marking a rerun incomplete preserves the previous deployment outputs, runner
+metadata and verification URL. Those retained details are diagnostics from the
+previous run, not proof that current setup is ready.
 
 A failed setup leaves deployments disabled but can leave billable resources.
 Apply and cleanup refuse active/queued/waiting main-branch CI and promotion
@@ -117,8 +120,10 @@ out. A missing/stale GitHub runner registration requires deliberate runner
 repair, not silently deleting another registration.
 
 Protected Run Commands are deleted in `finally`, including after failures.
-If cleanup itself fails, the error is surfaced: inspect and remove the named
-command after correcting permissions. Do not publish Run Command diagnostics
+If execution and cleanup both fail, both errors are reported, including the
+command name; cleanup never replaces the primary failure. A cleanup-only failure
+also fails setup explicitly. Inspect and remove the named command after
+correcting permissions. Do not publish Run Command diagnostics
 or local setup state if they contain sensitive environment details.
 
 After successful setup, dispatch **Database CI and dev deployment** for the

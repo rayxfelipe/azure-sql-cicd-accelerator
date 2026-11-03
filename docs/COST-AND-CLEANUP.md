@@ -29,14 +29,24 @@ group, never a baseline/shared group. Preview first:
 ```
 
 Cleanup verifies both ownership tags, disables releases, refuses a busy runner,
-removes only this accelerator runner registration, deletes the dedicated group
-and checks that it no longer exists. Review the displayed inventory: all
+and records its exact runner IDs in the ignored local setup state. It deletes the
+dedicated Azure group and confirms it is absent **before** removing those runner
+registrations. If Azure deletion fails, the registrations remain usable.
+Review the displayed inventory: all
 resources in the owned group, including ones added later, will be deleted.
 
 The GitHub repository, environments, variables and custom OIDC subject policy
 are retained. OIDC federation/identities disappear with the resource group.
-If the group is already absent, cleanup returns without changing GitHub; disable
-release variables manually if deletion happened outside this script.
+If GitHub runner removal fails after Azure deletion, fix the reported error and
+rerun the same cleanup command with `-Apply`. The saved checkpoint lets it finish
+registration cleanup even though the Azure group is already absent. Retry targets
+recorded IDs, not a replacement runner with the same name, and refuses mismatched
+repository/deployment state.
+
+If no checkpoint exists and a matching runner remains, cleanup refuses to guess
+ownership; inspect that registration manually. If both the group and matching
+runner are already absent, cleanup returns without changing GitHub settings.
+Disable release variables manually if deletion happened outside this script.
 
 After cleanup, preserve local state if you may reprovision with the same
 configuration. To adopt elsewhere, use a separate fresh checkout and a new

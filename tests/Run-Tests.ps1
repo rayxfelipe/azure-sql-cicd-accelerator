@@ -124,19 +124,202 @@ try {
 }
 finally { Set-Item -Path function:Invoke-GithubApi -Value $originalApi }
 
+$stateFile = Join-Path ([IO.Path]::GetTempPath()) "sql-accelerator-state-test-$([guid]::NewGuid().ToString('N')).json"
+try {
+    Update-SetupState $stateFile @{
+        configuration = $config; complete = $true
+        deployment = @{ subscriptionId = $config.subscriptionId; resourceGroup = 'rg-adopter'; runnerVm = 'vm-adopter' }
+        repositoryId = 99; runnerName = 'sql-99-adopter'; verificationUrl = 'https://github.com/owner/adopter/actions/runs/123'
+    }
+    Update-SetupState $stateFile @{ configuration = $config; complete = $false }
+    $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
+    Assert-Test (-not $state.complete) 'Rerun state is explicitly marked incomplete'
+    Assert-Test ($state.deployment.runnerVm -eq 'vm-adopter' -and $state.deployment.resourceGroup -eq 'rg-adopter') 'Early rerun failure retains previous deployment outputs'
+    Assert-Test ($state.repositoryId -eq 99 -and $state.runnerName -eq 'sql-99-adopter') 'Early rerun failure retains runner ownership metadata'
+    Assert-Test ($state.verificationUrl -eq 'https://github.com/owner/adopter/actions/runs/123') 'Previous verification evidence is retained without claiming current readiness'
+    Update-SetupState $stateFile @{ complete = $true; verificationUrl = 'https://github.com/owner/adopter/actions/runs/456' }
+    $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
+    Assert-Test ($state.complete -and $state.verificationUrl.EndsWith('/456') -and $state.deployment.runnerVm -eq 'vm-adopter') 'Successful state update replaces only supplied fields'
+    '{invalid-json' | Set-Content -LiteralPath $stateFile
+    Assert-Throws { Update-SetupState $stateFile @{ complete = $false } } 'JSON' 'Invalid existing state fails explicitly rather than being overwritten'
+    Assert-Test ((Get-Content -LiteralPath $stateFile -Raw).Trim() -eq '{invalid-json') 'Failed state parse leaves the original file intact'
+}
+finally { Remove-Item -LiteralPath $stateFile }
+
+function Get-TestError {
+    param([scriptblock] $Action)
+    try { $null = & $Action }
+    catch { return $_ }
+    throw 'Expected an error, but the operation succeeded.'
+}
+
 $originalNative = ${function:Invoke-CheckedCommand}
 $script:nativeCalls = @()
+$script:initializationFailure = $true
+$script:commandCleanupFailure = $false
+$script:guestResult = @{ executionState = 'Succeeded'; exitCode = 0; output = 'Initialized' }
 function Invoke-CheckedCommand {
     param([string] $Command, [string[]] $Arguments)
     $script:nativeCalls += ,$Arguments
-    if ($Arguments[2] -eq 'create') { throw 'Simulated initialization failure' }
+    if ($Arguments[2] -eq 'create' -and $script:initializationFailure) {
+        throw [System.Management.Automation.ErrorRecord]::new(
+            [InvalidOperationException]::new('Simulated initialization failure'), 'InitializationFailure',
+            [System.Management.Automation.ErrorCategory]::OperationStopped, $null)
+    }
+    if ($Arguments[2] -eq 'show') { $script:guestResult | ConvertTo-Json -Compress }
+    if ($Arguments[2] -eq 'delete' -and $script:commandCleanupFailure) { throw 'Simulated Run Command cleanup failure' }
 }
 try {
     $configuration = [pscustomobject]@{ subscriptionId = 'test'; resourceGroup = 'rg-adopter'; runnerVm = 'vm-adopter'; location = 'eastus' }
-    Assert-Throws { Invoke-PrivateRunCommand $configuration 'exit 1' @('Token=fake-test-value') } 'Simulated initialization failure' 'Run Command failure is surfaced'
+    $errorRecord = Get-TestError { Invoke-PrivateRunCommand $configuration 'exit 1' @('Token=fake-test-value') }
+    Assert-Test ($errorRecord.Exception.Message -eq 'Simulated initialization failure') 'Run Command failure is surfaced'
+    Assert-Test ($errorRecord.FullyQualifiedErrorId -match 'InitializationFailure') 'Primary error identity is retained when cleanup succeeds'
     Assert-Test ($script:nativeCalls.Count -eq 2 -and $script:nativeCalls[1][2] -eq 'delete') 'Protected Run Command is cleaned up even when initialization fails'
     Assert-Test ($script:nativeCalls[0] -contains '--protected-parameters') 'Bootstrap values use protected Run Command parameters'
+    $script:commandCleanupFailure = $true
+    $errorRecord = Get-TestError { Invoke-PrivateRunCommand $configuration 'exit 1' @('Token=fake-test-value') }
+    Assert-Test ($errorRecord.Exception -is [AggregateException] -and $errorRecord.Exception.InnerExceptions.Count -eq 2) 'Execution and cleanup failures are both retained'
+    Assert-Test ($errorRecord.Exception.InnerExceptions[0].Message -eq 'Simulated initialization failure' -and
+        $errorRecord.Exception.InnerExceptions[1].Message -eq 'Simulated Run Command cleanup failure') 'Aggregate preserves the primary and secondary failure details'
+    Assert-Test ($errorRecord.Exception.Message -match "accelerator-[a-f0-9]{32}" -and $errorRecord.Exception.Message -match 'Cleanup also failed') 'Combined error identifies the Run Command requiring cleanup'
+    $script:initializationFailure = $false
+    $errorRecord = Get-TestError { Invoke-PrivateRunCommand $configuration 'exit 0' @('Token=fake-test-value') }
+    Assert-Test ($errorRecord.Exception.Message -match 'executed successfully but cleanup failed') 'Cleanup-only failure is explicit and does not report overall success'
+    $script:guestResult = @{ executionState = 'Failed'; exitCode = 1; output = 'Simulated guest failure' }
+    $errorRecord = Get-TestError { Invoke-PrivateRunCommand $configuration 'exit 1' @('Token=fake-test-value') }
+    Assert-Test ($errorRecord.Exception -is [AggregateException] -and $errorRecord.Exception.InnerExceptions[0].Message -match 'Simulated guest failure') 'Guest execution failure is retained when cleanup also fails'
+    $script:commandCleanupFailure = $false
+    Assert-Throws { Invoke-PrivateRunCommand $configuration 'exit 1' @('Token=fake-test-value') } 'Simulated guest failure' 'Guest execution failure is surfaced after successful cleanup'
+    $script:guestResult = @{ executionState = 'Succeeded'; exitCode = 0; output = 'Initialized' }
+    $script:nativeCalls = @()
+    $output = @(Invoke-PrivateRunCommand $configuration 'exit 0' @('Token=fake-test-value'))
+    Assert-Test ($output -contains 'Initialized' -and $script:nativeCalls.Count -eq 3) 'Successful execution still returns output and cleans up'
 }
 finally { Set-Item -Path function:Invoke-CheckedCommand -Value $originalNative }
+
+$originalApi = ${function:Invoke-GithubApi}
+$originalVariable = ${function:Set-GithubVariable}
+$originalActiveGuard = ${function:Assert-NoActiveReleaseRuns}
+$cleanupStateFile = Join-Path ([IO.Path]::GetTempPath()) "sql-accelerator-cleanup-test-$([guid]::NewGuid().ToString('N')).json"
+function Reset-CleanupTest {
+    $script:cleanupCalls = @()
+    $script:azureGroupExists = $true
+    $script:azureDeletionFailure = $false
+    $script:azureDeletionPending = $false
+    $script:runnerDeletionFailure = $false
+    $script:activeReleaseFailure = $false
+    $script:runnerRecords = @(
+        [pscustomobject]@{ id = 7; name = 'sql-99-adopter'; busy = $false },
+        [pscustomobject]@{ id = 8; name = 'unrelated-runner'; busy = $false }
+    )
+    if (Test-Path -LiteralPath $cleanupStateFile) { Remove-Item -LiteralPath $cleanupStateFile }
+    Update-SetupState $cleanupStateFile @{ configuration = $config; complete = $true; deployment = @{ runnerVm = 'vm-adopter' } }
+}
+function Invoke-CheckedCommand {
+    param([string] $Command, [string[]] $Arguments)
+    if ($Arguments[0] -eq 'group' -and $Arguments[1] -eq 'delete') {
+        $script:cleanupCalls += 'delete-azure'
+        if ($script:azureDeletionFailure) { throw 'Simulated Azure deletion blocked by lock' }
+        if (-not $script:azureDeletionPending) { $script:azureGroupExists = $false }
+    }
+    elseif ($Arguments[0] -eq 'group' -and $Arguments[1] -eq 'exists') { $script:azureGroupExists.ToString().ToLowerInvariant() }
+    else { throw "Unexpected native cleanup command: $Command $($Arguments -join ' ')" }
+}
+function Invoke-GithubApi {
+    param([string] $Path, [string] $Method = 'GET', [object] $Body)
+    if ($Path -eq 'repos/owner/adopter') { return [pscustomobject]@{ id = 99 } }
+    if ($Path -eq 'repos/owner/adopter/actions/runners?per_page=100') {
+        return [pscustomobject]@{ total_count = $script:runnerRecords.Count; runners = $script:runnerRecords }
+    }
+    if ($Method -eq 'DELETE') {
+        $id = [long]($Path -split '/')[-1]
+        $script:cleanupCalls += "delete-runner-$id"
+        if ($script:runnerDeletionFailure) { throw 'Simulated GitHub runner deletion failure' }
+        $script:runnerRecords = @($script:runnerRecords | Where-Object id -ne $id)
+        return
+    }
+    throw "Unexpected cleanup API request: $Method $Path"
+}
+function Set-GithubVariable {
+    param([string] $Repository, [string] $Name, [string] $Value, [string] $Environment)
+    $script:cleanupCalls += "set-$Name-$Value"
+}
+function Assert-NoActiveReleaseRuns {
+    param([string] $Repository)
+    if ($script:activeReleaseFailure) { throw 'Simulated active release' }
+}
+try {
+    Reset-CleanupTest
+    Remove-AcceleratorResources $config $cleanupStateFile $true
+    Assert-Test ([Array]::IndexOf($script:cleanupCalls, 'delete-azure') -lt [Array]::IndexOf($script:cleanupCalls, 'delete-runner-7')) 'Azure resources are deleted before the runner registration'
+    Assert-Test (-not $script:azureGroupExists -and $script:runnerRecords.Count -eq 1 -and $script:runnerRecords[0].id -eq 8) 'Successful cleanup preserves unrelated runner registrations'
+    $state = Get-Content -LiteralPath $cleanupStateFile -Raw | ConvertFrom-Json
+    Assert-Test (-not $state.complete -and $null -eq $state.cleanup -and $state.deployment.runnerVm -eq 'vm-adopter') 'Successful cleanup clears its checkpoint while retaining deployment diagnostics'
+
+    Reset-CleanupTest
+    $script:azureDeletionFailure = $true
+    Assert-Throws { Remove-AcceleratorResources $config $cleanupStateFile $true } 'blocked by lock' 'Azure deletion failure is explicit'
+    Assert-Test ($script:runnerRecords.Count -eq 2 -and $script:cleanupCalls -notcontains 'delete-runner-7') 'Failed Azure deletion retains the usable runner registration'
+    $state = Get-Content -LiteralPath $cleanupStateFile -Raw | ConvertFrom-Json
+    Assert-Test ($state.cleanup.runnerIds.Count -eq 1 -and $state.cleanup.runnerIds[0] -eq 7) 'Cleanup checkpoints exact runner IDs before attempting Azure deletion'
+
+    Reset-CleanupTest
+    $script:azureDeletionPending = $true
+    Assert-Throws { Remove-AcceleratorResources $config $cleanupStateFile $true } 'has not completed' 'Unconfirmed Azure deletion blocks runner removal'
+    Assert-Test ($script:cleanupCalls -notcontains 'delete-runner-7') 'Pending Azure deletion leaves the registration intact'
+
+    Reset-CleanupTest
+    $script:runnerDeletionFailure = $true
+    Assert-Throws { Remove-AcceleratorResources $config $cleanupStateFile $true } 'GitHub runner deletion failure' 'Post-Azure GitHub cleanup failure remains explicit'
+    Assert-Test (-not $script:azureGroupExists -and $script:runnerRecords.Count -eq 2) 'Failed GitHub cleanup leaves a recoverable checkpoint after Azure deletion'
+    $script:runnerDeletionFailure = $false
+    $script:cleanupCalls = @()
+    Remove-AcceleratorResources $config $cleanupStateFile $false
+    Assert-Test ($script:cleanupCalls -notcontains 'delete-azure' -and $script:runnerRecords.Count -eq 1 -and $script:runnerRecords[0].id -eq 8) 'Retry finishes recorded runner cleanup when Azure group is already absent'
+
+    Reset-CleanupTest
+    $script:runnerDeletionFailure = $true
+    Assert-Throws { Remove-AcceleratorResources $config $cleanupStateFile $true } 'GitHub runner deletion failure' 'Replacement-runner test creates a pending cleanup checkpoint'
+    $script:runnerDeletionFailure = $false
+    $script:runnerRecords = @(
+        [pscustomobject]@{ id = 17; name = 'sql-99-adopter'; busy = $false },
+        [pscustomobject]@{ id = 8; name = 'unrelated-runner'; busy = $false }
+    )
+    $script:cleanupCalls = @()
+    Remove-AcceleratorResources $config $cleanupStateFile $false
+    Assert-Test ($script:runnerRecords.Count -eq 2 -and $script:cleanupCalls -notcontains 'delete-runner-17') 'Retry never deletes a replacement runner just because its name matches'
+
+    Reset-CleanupTest
+    $script:azureDeletionFailure = $true
+    Assert-Throws { Remove-AcceleratorResources $config $cleanupStateFile $true } 'blocked by lock' 'Mismatched-target test creates a cleanup checkpoint'
+    $changed = $config.Clone()
+    $changed.resourceGroupName = 'rg-another'
+    $script:cleanupCalls = @()
+    Assert-Throws { Remove-AcceleratorResources $changed $cleanupStateFile $false } 'another deployment' 'Cleanup retry refuses a different resource group'
+    Assert-Test ($script:cleanupCalls.Count -eq 0) 'Mismatched retry does not mutate Azure or GitHub'
+
+    Reset-CleanupTest
+    Assert-Throws { Remove-AcceleratorResources $config $cleanupStateFile $false } 'No saved cleanup record' 'Absent Azure group cannot authorize deleting a runner by name'
+    Assert-Test ($script:cleanupCalls.Count -eq 0) 'Unproven orphan ownership leaves GitHub settings and runners unchanged'
+    $script:runnerRecords = @([pscustomobject]@{ id = 8; name = 'unrelated-runner'; busy = $false })
+    Remove-AcceleratorResources $config $cleanupStateFile $false
+    Assert-Test ($script:cleanupCalls.Count -eq 0) 'Already-clean deployment is an explicit no-op'
+
+    Reset-CleanupTest
+    $script:runnerRecords[0].busy = $true
+    Assert-Throws { Remove-AcceleratorResources $config $cleanupStateFile $true } 'runner is busy' 'Busy runner blocks Azure and registration deletion'
+    Assert-Test ($script:cleanupCalls.Count -eq 0) 'Busy-runner refusal does not change resources or release variables'
+    Reset-CleanupTest
+    $script:activeReleaseFailure = $true
+    Assert-Throws { Remove-AcceleratorResources $config $cleanupStateFile $true } 'active release' 'Active release blocks both cleanup stages'
+    Assert-Test ($script:cleanupCalls -notcontains 'delete-azure' -and $script:cleanupCalls -notcontains 'delete-runner-7') 'Active-release refusal retains Azure resources and registration'
+}
+finally {
+    Set-Item -Path function:Invoke-CheckedCommand -Value $originalNative
+    Set-Item -Path function:Invoke-GithubApi -Value $originalApi
+    Set-Item -Path function:Set-GithubVariable -Value $originalVariable
+    Set-Item -Path function:Assert-NoActiveReleaseRuns -Value $originalActiveGuard
+    if (Test-Path -LiteralPath $cleanupStateFile) { Remove-Item -LiteralPath $cleanupStateFile }
+}
 
 Write-Host "$script:passed accelerator regression tests passed."

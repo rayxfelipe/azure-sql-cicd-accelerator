@@ -27,6 +27,17 @@ function Set-GithubVariable {
     $null = Invoke-CheckedCommand gh $arguments
 }
 
+function Update-SetupState {
+    param([string] $Path, [hashtable] $Values)
+    $state = if (Test-Path -LiteralPath $Path) {
+        Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json -AsHashtable
+    }
+    else { @{} }
+    foreach ($entry in $Values.GetEnumerator()) { $state[$entry.Key] = $entry.Value }
+    $null = New-Item -ItemType Directory -Path (Split-Path $Path -Parent) -Force
+    $state | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $Path
+}
+
 function Get-Ipv4Cidr {
     param([string] $Cidr)
     if ($Cidr -notmatch '^(\d{1,3}(?:\.\d{1,3}){3})/(\d{1,2})$') { throw "Invalid IPv4 CIDR: $Cidr" }
@@ -164,12 +175,65 @@ function Assert-TrustedRelease {
     $releaseArtifacts[0]
 }
 
+function Remove-AcceleratorResources {
+    param([object] $Configuration, [string] $StatePath, [bool] $ResourceGroupExists)
+    $repo = Invoke-GithubApi "repos/$($Configuration.repository)"
+    $runnerName = "sql-$($repo.id)-$($Configuration.resourcePrefix)"
+    $runners = Invoke-GithubApi "repos/$($Configuration.repository)/actions/runners?per_page=100"
+    if ($runners.total_count -gt 100) { throw 'Refusing cleanup with a truncated runner list.' }
+    if ($ResourceGroupExists) {
+        $targets = @($runners.runners | Where-Object name -eq $runnerName)
+        $cleanup = @{
+            configuration = $Configuration
+            repositoryId = $repo.id
+            runnerIds = @($targets | ForEach-Object id)
+        }
+    }
+    else {
+        $state = if (Test-Path -LiteralPath $StatePath) {
+            Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json -AsHashtable
+        }
+        else { @{} }
+        if (-not $state['cleanup']) {
+            if (@($runners.runners | Where-Object name -eq $runnerName).Count -gt 0) {
+                throw 'Azure group is absent but a matching runner remains. No saved cleanup record proves its ownership; inspect the registration manually rather than deleting by name.'
+            }
+            Write-Host 'Resource group is already absent and no matching runner remains. GitHub settings are unchanged.'
+            return
+        }
+        $cleanup = $state['cleanup']
+        foreach ($field in @('subscriptionId', 'repository', 'resourceGroupName', 'resourcePrefix')) {
+            if ($cleanup.configuration[$field] -ne $Configuration.$field) { throw "Saved cleanup '$field' differs. Refusing to remove runner registrations for another deployment." }
+        }
+        if ($cleanup.repositoryId -ne $repo.id) { throw 'Saved cleanup repository ID differs. Refusing to use registrations from another repository.' }
+        $targets = @($runners.runners | Where-Object { $_.id -in $cleanup.runnerIds })
+    }
+    foreach ($runner in $targets) {
+        if ($runner.busy) { throw 'Accelerator runner is busy. Wait for or cancel its workflow before cleanup.' }
+    }
+    Set-GithubVariable $Configuration.repository 'SETUP_COMPLETE' 'false'
+    Set-GithubVariable $Configuration.repository 'SETUP_IN_PROGRESS' 'false'
+    Assert-NoActiveReleaseRuns $Configuration.repository
+    if ($ResourceGroupExists) {
+        Update-SetupState $StatePath @{ configuration = $Configuration; complete = $false; cleanup = $cleanup }
+        $null = Invoke-CheckedCommand az @('group', 'delete', '--subscription', $Configuration.subscriptionId, '--name', $Configuration.resourceGroupName, '--yes')
+        $remaining = (Invoke-CheckedCommand az @('group', 'exists', '--subscription', $Configuration.subscriptionId, '--name', $Configuration.resourceGroupName)) -join ''
+        if ($remaining -ne 'false') { throw 'Resource group deletion has not completed. Runner registrations were retained; rerun cleanup once Azure deletion completes.' }
+    }
+    foreach ($runner in $targets) {
+        $null = Invoke-GithubApi "repos/$($Configuration.repository)/actions/runners/$($runner.id)" DELETE
+    }
+    Update-SetupState $StatePath @{ complete = $false; cleanup = $null }
+    Write-Host 'Accelerator Azure resources deleted; recorded runner registrations removed and GitHub deployments disabled. Repository, environments and OIDC subject customization were retained.'
+}
+
 function Invoke-PrivateRunCommand {
     param([object] $Configuration, [string] $Script, [string[]] $ProtectedParameters, [int] $TimeoutSeconds = 600)
     $name = "accelerator-$([guid]::NewGuid().ToString('N'))"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Script.Replace("`r`n", "`n")))
     $arguments = @('--subscription', $Configuration.subscriptionId, '--resource-group', $Configuration.resourceGroup,
         '--vm-name', $Configuration.runnerVm, '--run-command-name', $name)
+    $primaryError = $null
     try {
         $null = Invoke-CheckedCommand az (@('vm', 'run-command', 'create') + $arguments + @('--location', $Configuration.location,
             '--script', "printf '%s' '$encoded' | base64 --decode | bash", '--protected-parameters') +
@@ -181,9 +245,24 @@ function Invoke-PrivateRunCommand {
         }
         $result.output
     }
+    catch { $primaryError = $_ }
     finally {
-        $null = Invoke-CheckedCommand az (@('vm', 'run-command', 'delete') + $arguments + @('--yes', '--output', 'none'))
+        try {
+            $null = Invoke-CheckedCommand az (@('vm', 'run-command', 'delete') + $arguments + @('--yes', '--output', 'none'))
+        }
+        catch {
+            $cleanupError = $_
+            if ($null -ne $primaryError) {
+                throw [AggregateException]::new(
+                    "Private Run Command '$name' failed: $($primaryError.Exception.Message). Cleanup also failed: $($cleanupError.Exception.Message). Remove the named command after correcting the cleanup failure.",
+                    [Exception[]]@($primaryError.Exception, $cleanupError.Exception))
+            }
+            throw [InvalidOperationException]::new(
+                "Private Run Command '$name' executed successfully but cleanup failed: $($cleanupError.Exception.Message). Remove the named command after correcting the cleanup failure.",
+                $cleanupError.Exception)
+        }
     }
+    if ($null -ne $primaryError) { throw $primaryError }
 }
 
 function Invoke-WorkflowAndWait {
