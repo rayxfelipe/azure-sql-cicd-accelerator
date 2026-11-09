@@ -88,6 +88,33 @@ Guest DNS checks also resolved SQL inside the configured private-endpoint subnet
 These checks verify the command-line transport fix, not a complete setup rerun
 or a successful dev/production release.
 
+## Fresh-repository walkthrough: November 9, 2026
+
+The maintainer completed the quick start in a separate private template-created
+repository and isolated Azure environment. The initial attempt exposed the
+Windows command-line limit; setup subsequently completed with the same
+configuration after applying the
+[transport fix](https://github.com/rayxfelipe/azure-sql-cicd-accelerator/commit/89f1cb21e72db3e18eb188167b3914c307af40a3).
+This is successful adoption after a documented fix, not an untouched first-attempt
+success. Evidence links below require access to the private trial repository;
+adopters do not need that access to use the accelerator.
+
+| Acceptance check | Evidence / result |
+|---|---|
+| Guided setup | [Setup verification](https://github.com/rayxfelipe/azure-sql-cicd-trial/actions/runs/42710120497) succeeded after the unchanged-configuration recovery. |
+| Initial dev schema release | [Manual dev run](https://github.com/rayxfelipe/azure-sql-cicd-trial/actions/runs/42714443544) succeeded. |
+| Additive schema PR | [Trial PR](https://github.com/rayxfelipe/azure-sql-cicd-trial/pull/1) added the nullable `CustomerNote` column and its smoke assertion; [PR validation](https://github.com/rayxfelipe/azure-sql-cicd-trial/actions/runs/42717123856) passed `build` and skipped `deploy-dev`. |
+| Post-merge dev release | [Dev run `42717303020`](https://github.com/rayxfelipe/azure-sql-cicd-trial/actions/runs/42717303020) passed `build`, `deploy-dev` and SQL smoke tests at commit `462987d193a577c110746f869f6f506666c0b5fa`. |
+| Production promotion | [Production run](https://github.com/rayxfelipe/azure-sql-cicd-trial/actions/runs/42718185335) passed trusted-source validation and exact-dev-artifact deployment, including production SQL smoke tests. |
+| Immutable artifact | Dev run `42717303020` published `database-release`, artifact ID `13717823037`; production downloaded from that same source run through the validated artifact-ID path. |
+
+This establishes the Windows happy path through fresh-repository onboarding,
+schema-change review and production promotion. It does **not** complete the
+clean already-completed-setup rerun, VM deallocate/start recovery, live negative
+promotion tests, or cleanup/recreation acceptance checks. Those remain separate
+release gates. Artifacts expire after 14 days; retain these links as dated
+evidence, not as indefinitely reusable production inputs.
+
 ## Maintainer source verification
 
 Verified November 2, 2026:

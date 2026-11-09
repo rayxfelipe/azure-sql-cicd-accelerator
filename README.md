@@ -81,6 +81,14 @@ repository**. Choose your account/organization, a unique name such as
 `azure-sql-cicd-trial`, and **Private**. Keep the default branch `main`; copying
 all branches is unnecessary. A private template requires access to its source.
 
+**Complete both actions:** first create your repository in the GitHub UI, then
+clone that new repository using the PowerShell commands below. They are not
+alternative ways to do the same thing: the template creates an independent
+repository with fresh history; cloning downloads your new repository locally.
+Run the clone commands from the parent folder where you want it created, not
+inside an existing clone. `YOUR-OWNER` is the GitHub username or organization
+that owns your new repository, not your Azure tenant or subscription owner.
+
 **Do not clone the accelerator source directly, fork it, or reuse its runner.**
 The customer repository needs its own GitHub settings, OIDC trust and Azure
 resources. These settings are not copied from the template.
@@ -189,8 +197,13 @@ See [setup failures](docs/SETUP.md#reruns-and-failures).
 
 ### 6. Deploy the initial schema to dev
 
-In **your repository > Actions**, select **Database CI and dev deployment >
-Run workflow**, choose branch **main**, and run it. CLI equivalent:
+In **your new private deployment repository > Actions** (not the accelerator
+template), select **Database CI and dev deployment > Run workflow**, choose
+branch **main**, and run it. You can reopen the correct repository with
+`gh repo view $Repository --web`.
+
+Alternatively, dispatch it from your PowerShell terminal with the command
+below. Use **either** the GitHub UI **or** this CLI command, not both:
 
 ```powershell
 gh workflow run database-ci.yml --repo $Repository --ref main
@@ -208,9 +221,13 @@ does not prove a SQL release. Keep the runner online through step 8.
 
 ### 7. Make and release an additive schema change through a PR
 
-From your new repository checkout:
+Run every Git command in this step in **PowerShell 7 inside your local clone of
+the new private deployment repository**. Check the directory and remote before
+creating the feature branch:
 
 ```powershell
+Get-Location
+git remote get-url origin
 git status --short --branch
 git switch main
 git pull --ff-only
@@ -218,23 +235,33 @@ git switch -c add-customer-note
 ```
 
 The working tree should be clean before switching branches; do not discard
-unrelated changes to force this step.
+unrelated changes to force this step. `origin` must name your new repository,
+not the accelerator template.
 
-In [the sample table](database/Tables/ServiceRequest.sql), add this nullable
-column before the existing `Priority` column, retaining the comma:
+**Edit the following files locally in VS Code on `add-customer-note`.**
+Links viewed on the template's GitHub page show template files as references;
+open the corresponding files in your local trial checkout instead. Do not edit
+the template or make these changes directly on `main`.
+
+In [database/Tables/ServiceRequest.sql](database/Tables/ServiceRequest.sql), add
+this nullable column before the existing `Priority` column, retaining the comma:
 
 ```sql
     [CustomerNote] NVARCHAR(100) NULL,
 ```
 
-In [the smoke test](tests/Smoke.sql), after the existing missing-table/view checks
-and **before `BEGIN TRY`**, add an assertion so the deployment proves the new
-column exists in both environments:
+In [tests/Smoke.sql](tests/Smoke.sql), after the existing missing-table/view
+checks and **before `BEGIN TRY`**, add an assertion so the deployment proves the
+new column exists in both environments:
 
 ```sql
 IF COL_LENGTH(N'dbo.ServiceRequest', N'CustomerNote') IS NULL
     THROW 51008, 'CustomerNote column is missing.', 1;
 ```
+
+**Save both files before continuing.** These snippets are file edits, not SQL
+commands to execute manually against Azure SQL. Local validation checks syntax
+and builds the project; the workflows execute smoke tests after deployment.
 
 ```powershell
 .\scripts\Test-Accelerator.ps1
@@ -255,11 +282,24 @@ After merging, open the new **push-to-main** CI run. Require `build` and
 ID**: it is the numeric value after `/actions/runs/` in the run URL, **not** the
 displayed run number, job ID or artifact ID.
 
+If you did not save it, reopen that run under **your repository > Actions** and
+copy the number from its URL, or list recent push-to-main runs:
+
+```powershell
+gh run list --repo $Repository --workflow database-ci.yml --branch main --event push --limit 5 --json databaseId,displayTitle,status,conclusion,url
+```
+
+Use the `databaseId` for your merged change. Open its `url` and confirm
+`deploy-dev` and its SQL smoke-test step succeeded; a workflow-level `success`
+can also describe an earlier build-only run.
+
 ### 8. Promote that exact dev artifact to production
 
-Open **Actions > Promote verified database to production > Run workflow**.
+In **the same new private deployment repository**, open **Actions > Promote
+verified database to production > Run workflow**.
 Choose **main** and enter the successful **post-merge dev run ID** from step 7
-as `source_run_id`. CLI equivalent:
+as `source_run_id`. Alternatively, dispatch it from PowerShell below; use the
+UI or CLI, not both:
 
 ```powershell
 $DevRunId = 'YOUR-SUCCESSFUL-POST-MERGE-DEV-RUN-ID'
@@ -312,7 +352,10 @@ with the successful dev run ID to reuse its exact artifact.
 
 This is a generalized accelerator derived from a working private demonstration,
 not a replacement for that baseline. Its historical deployment evidence is
-**not** proof that a fresh accelerator environment passed.
+**not** proof that a fresh accelerator environment passed. A separate
+fresh-repository Windows walkthrough subsequently passed setup, dev deployment,
+a schema-change PR and same-artifact production promotion; see the
+[dated acceptance evidence and remaining checks](docs/VALIDATION.md#fresh-repository-walkthrough-november-9-2026).
 
 Version 1 supports **GitHub.com private repositories and Azure public cloud**,
 fixed `dev`/`production` environment names, Ubuntu 24.04 x64 and one persistent
@@ -322,5 +365,25 @@ starter sizing, not a highly available production architecture.
 
 Protect `main`, restrict repository write access and configure production
 reviewers where your GitHub plan permits. A manual dispatch alone is not
-two-person approval. Deploy-to-Azure buttons are intentionally omitted:
-infrastructure provisioning is only one part of CI/CD onboarding.
+two-person approval.
+
+### Could this use a Deploy to Azure button?
+
+Yes, for the Azure infrastructure portion. Microsoft's
+[Deploy to Azure button](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-to-azure-button)
+loads a remotely accessible **ARM JSON** template, not a Bicep source file.
+Subscription scope is supported, so this topology could be compiled and
+published for that path. The current private source repository would need an
+accessible template-hosting solution.
+
+However, a standard portal deployment does not by itself create/configure your
+private GitHub repository, establish repository-specific OIDC subjects, register
+the runner, bootstrap SQL administrator-authorized grants or verify the release
+gates. Those steps still require the appropriate GitHub and Entra permissions
+and coordinated onboarding. An infrastructure-only button could leave billable
+resources with CI/CD incomplete.
+
+Version 1 therefore keeps the guided setup command as its complete onboarding
+path. No portal button is implemented. Adding one would require a tested handoff
+to that setup flow, including configuration/state and rerun ownership checks,
+not just a badge linking to the infrastructure template.
