@@ -233,11 +233,49 @@ function Invoke-PrivateRunCommand {
     $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Script.Replace("`r`n", "`n")))
     $arguments = @('--subscription', $Configuration.subscriptionId, '--resource-group', $Configuration.resourceGroup,
         '--vm-name', $Configuration.runnerVm, '--run-command-name', $name)
+    $resourceId = "/subscriptions/$($Configuration.subscriptionId)/resourceGroups/$($Configuration.resourceGroup)/providers/Microsoft.Compute/virtualMachines/$($Configuration.runnerVm)/runCommands/$name"
+    $apiVersion = '2024-11-01'
+    $directory = $null
+    $createAttempted = $false
     $primaryError = $null
+    $cleanupErrors = [Collections.Generic.List[Exception]]::new()
     try {
-        $null = Invoke-CheckedCommand az (@('vm', 'run-command', 'create') + $arguments + @('--location', $Configuration.location,
-            '--script', "printf '%s' '$encoded' | base64 --decode | bash", '--protected-parameters') +
-            $ProtectedParameters + @('--timeout-in-seconds', "$TimeoutSeconds", '--output', 'none'))
+        $parameters = @(
+            foreach ($parameter in $ProtectedParameters) {
+                $separator = $parameter.IndexOf('=')
+                if ($separator -le 0) { throw 'Invalid protected Run Command parameter; expected Name=Value.' }
+                @{ name = $parameter.Substring(0, $separator); value = $parameter.Substring($separator + 1) }
+            }
+        )
+        $directory = [IO.Directory]::CreateTempSubdirectory('sql-cicd-run-command-')
+        if ($IsWindows) {
+            $acl = [Security.AccessControl.DirectorySecurity]::new()
+            $acl.SetAccessRuleProtection($true, $false)
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+                [Security.Principal.WindowsIdentity]::GetCurrent().User, 'FullControl',
+                'ContainerInherit, ObjectInherit', 'None', 'Allow'))
+            Set-Acl -LiteralPath $directory.FullName -AclObject $acl
+        }
+        else {
+            [IO.File]::SetUnixFileMode($directory.FullName,
+                [IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute)
+        }
+        $requestPath = Join-Path $directory.FullName 'request.json'
+        $body = @{
+            location = $Configuration.location
+            properties = @{
+                source = @{ script = "printf '%s' '$encoded' | base64 --decode | bash" }
+                protectedParameters = $parameters
+                timeoutInSeconds = $TimeoutSeconds
+                asyncExecution = $false
+            }
+        } | ConvertTo-Json -Depth 10 -Compress
+        [IO.File]::WriteAllText($requestPath, $body, [Text.UTF8Encoding]::new($false))
+        $createAttempted = $true
+        $null = Invoke-CheckedCommand az @('rest', '--method', 'put', '--uri', "${resourceId}?api-version=$apiVersion",
+            '--subscription', $Configuration.subscriptionId, '--body', "@$requestPath", '--output', 'none')
+        $null = Invoke-CheckedCommand az @('resource', 'wait', '--ids', $resourceId, '--api-version', $apiVersion,
+            '--created', '--interval', '5', '--timeout', "$($TimeoutSeconds + 120)", '--output', 'none')
         $result = (Invoke-CheckedCommand az (@('vm', 'run-command', 'show') + $arguments +
             @('--expand', 'instanceView', '--query', 'instanceView', '--output', 'json'))) -join "`n" | ConvertFrom-Json
         if ($result.executionState -ne 'Succeeded' -or $result.exitCode -ne 0) {
@@ -248,18 +286,32 @@ function Invoke-PrivateRunCommand {
     catch { $primaryError = $_ }
     finally {
         try {
-            $null = Invoke-CheckedCommand az (@('vm', 'run-command', 'delete') + $arguments + @('--yes', '--output', 'none'))
+            if ($createAttempted) {
+                $null = Invoke-CheckedCommand az (@('vm', 'run-command', 'delete') + $arguments + @('--yes', '--output', 'none'))
+            }
+        }
+        catch { $cleanupErrors.Add($_.Exception) }
+        try {
+            if ($null -ne $directory) {
+                $requestPath = Join-Path $directory.FullName 'request.json'
+                if (Test-Path -LiteralPath $requestPath) { Remove-Item -LiteralPath $requestPath -Force }
+                Remove-Item -LiteralPath $directory.FullName -Force
+            }
         }
         catch {
-            $cleanupError = $_
+            $cleanupErrors.Add([InvalidOperationException]::new(
+                "Could not remove protected temporary request directory '$($directory.FullName)': $($_.Exception.Message)", $_.Exception))
+        }
+        if ($cleanupErrors.Count -gt 0) {
+            $details = ($cleanupErrors | ForEach-Object Message) -join '; '
             if ($null -ne $primaryError) {
                 throw [AggregateException]::new(
-                    "Private Run Command '$name' failed: $($primaryError.Exception.Message). Cleanup also failed: $($cleanupError.Exception.Message). Remove the named command after correcting the cleanup failure.",
-                    [Exception[]]@($primaryError.Exception, $cleanupError.Exception))
+                    "Private Run Command '$name' failed: $($primaryError.Exception.Message). Cleanup also failed: $details. Remove any remaining named command or protected request file after correcting the cleanup failure.",
+                    [Exception[]](@($primaryError.Exception) + $cleanupErrors.ToArray()))
             }
             throw [InvalidOperationException]::new(
-                "Private Run Command '$name' executed successfully but cleanup failed: $($cleanupError.Exception.Message). Remove the named command after correcting the cleanup failure.",
-                $cleanupError.Exception)
+                "Private Run Command '$name' executed successfully but cleanup failed: $details. Remove any remaining named command or protected request file after correcting the cleanup failure.",
+                [AggregateException]::new($cleanupErrors.ToArray()))
         }
     }
     if ($null -ne $primaryError) { throw $primaryError }

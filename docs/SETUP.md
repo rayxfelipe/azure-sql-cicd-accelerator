@@ -147,9 +147,14 @@ out. A missing/stale GitHub runner registration requires deliberate runner
 repair, not silently deleting another registration.
 
 Protected Run Commands are deleted in `finally`, including after failures.
+Scripts and protected parameters are sent using an ARM JSON request file, not
+inline arguments, so Windows Azure CLI command-line limits do not truncate the
+bootstrap. The temporary directory is restricted to the current setup user before
+credentials are written, and its request file and directory are removed in `finally`.
 If execution and cleanup both fail, both errors are reported, including the
 command name; cleanup never replaces the primary failure. A cleanup-only failure
-also fails setup explicitly. Inspect and remove the named command after
+also fails setup explicitly, including the directory path if local cleanup fails.
+Inspect and remove any remaining named command or protected request file after
 correcting permissions. Do not publish Run Command diagnostics
 or local setup state if they contain sensitive environment details.
 
@@ -168,6 +173,7 @@ through production promotion, then follow [the remaining adoption checks](VALIDA
 | Git commit reports an unknown author identity | Set `git config user.name "YOUR-NAME"` and `git config user.email "YOUR-APPROVED-COMMIT-EMAIL"` inside the customer repository, then retry. Use your organization's approved commit identity. |
 | Azure permission or provider-registration failure | Confirm the selected tenant/subscription and ask the platform team to provide the setup permissions above. Routine deployment identities are not setup operators. |
 | Entra SQL bootstrap rejects the operator | Verify the configured administrator user/group is in the target tenant and the signed-in operator is that user/a member. Renew `az login` if group membership changed. |
+| Windows reports `The command line is too long` after runner initialization | Older template copies passed the bootstrap inline to `az.cmd`. Update `scripts/Common.ps1` to the file-backed transport fix, keep your configuration, setup state and SSH keys, then rerun the same `-Apply` command. Do not delete/recreate resources or enable deployment gates manually. Template updates do not automatically update repositories created from the template. |
 | VM SKU, quota, address-range or policy failure | Select approved available sizing/region/networks before the first apply. After state is saved, do not edit targets or discard state to force a rerun; resolve the blocker or deliberately clean up and start an isolated new adoption. |
 | Setup refuses an active main-branch run | Let that run finish, or cancel it deliberately in GitHub, then rerun the same configuration. Setup intentionally does not alter infrastructure during releases. |
 | Verification waits or a deployment is queued | Check environment approval requests and the runner's online status. See [runner lifecycle](OPERATIONS.md#runner-lifecycle); do not open public SQL access or manually enable setup gates. |

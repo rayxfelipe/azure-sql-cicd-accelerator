@@ -157,15 +157,33 @@ $originalNative = ${function:Invoke-CheckedCommand}
 $script:nativeCalls = @()
 $script:initializationFailure = $true
 $script:commandCleanupFailure = $false
+$script:commandWaitFailure = $false
+$script:localRequestCleanupFailure = $false
 $script:guestResult = @{ executionState = 'Succeeded'; exitCode = 0; output = 'Initialized' }
+$script:requestPaths = @()
+function Remove-Item {
+    param([string] $LiteralPath, [switch] $Force)
+    if ($script:localRequestCleanupFailure -and (Split-Path $LiteralPath -Leaf) -eq 'request.json') {
+        throw 'Simulated local request cleanup failure'
+    }
+    Microsoft.PowerShell.Management\Remove-Item -LiteralPath $LiteralPath -Force:$Force
+}
 function Invoke-CheckedCommand {
     param([string] $Command, [string[]] $Arguments)
     $script:nativeCalls += ,$Arguments
-    if ($Arguments[2] -eq 'create' -and $script:initializationFailure) {
-        throw [System.Management.Automation.ErrorRecord]::new(
-            [InvalidOperationException]::new('Simulated initialization failure'), 'InitializationFailure',
-            [System.Management.Automation.ErrorCategory]::OperationStopped, $null)
+    if ($Arguments[0] -eq 'rest') {
+        $script:requestPath = $Arguments[[Array]::IndexOf($Arguments, '--body') + 1].Substring(1)
+        $script:requestPaths += $script:requestPath
+        $script:requestBody = Get-Content -LiteralPath $script:requestPath -Raw | ConvertFrom-Json
+        if ($IsWindows) { $script:requestAcl = Get-Acl -LiteralPath $script:requestPath }
+        else { $script:directoryMode = [IO.File]::GetUnixFileMode((Split-Path $script:requestPath)) }
+        if ($script:initializationFailure) {
+            throw [System.Management.Automation.ErrorRecord]::new(
+                [InvalidOperationException]::new('Simulated initialization failure'), 'InitializationFailure',
+                [System.Management.Automation.ErrorCategory]::OperationStopped, $null)
+        }
     }
+    if ($Arguments[0] -eq 'resource' -and $script:commandWaitFailure) { throw 'Simulated Run Command wait timeout' }
     if ($Arguments[2] -eq 'show') { $script:guestResult | ConvertTo-Json -Compress }
     if ($Arguments[2] -eq 'delete' -and $script:commandCleanupFailure) { throw 'Simulated Run Command cleanup failure' }
 }
@@ -175,7 +193,22 @@ try {
     Assert-Test ($errorRecord.Exception.Message -eq 'Simulated initialization failure') 'Run Command failure is surfaced'
     Assert-Test ($errorRecord.FullyQualifiedErrorId -match 'InitializationFailure') 'Primary error identity is retained when cleanup succeeds'
     Assert-Test ($script:nativeCalls.Count -eq 2 -and $script:nativeCalls[1][2] -eq 'delete') 'Protected Run Command is cleaned up even when initialization fails'
-    Assert-Test ($script:nativeCalls[0] -contains '--protected-parameters') 'Bootstrap values use protected Run Command parameters'
+    Assert-Test ($script:requestBody.properties.protectedParameters[0].name -eq 'Token' -and
+        $script:requestBody.properties.protectedParameters[0].value -eq 'fake-test-value' -and
+        -not $script:requestBody.properties.PSObject.Properties['parameters']) 'Bootstrap values use protected Run Command parameters'
+    Assert-Test (-not (($script:nativeCalls[0] -join ' ') -match 'fake-test-value')) 'Protected values never appear in Azure CLI arguments'
+    Assert-Test (-not (Test-Path -LiteralPath $script:requestPath) -and
+        -not (Test-Path -LiteralPath (Split-Path $script:requestPath))) 'Failed initialization removes the protected request file and directory'
+    if ($IsWindows) {
+        $rules = @($script:requestAcl.Access)
+        Assert-Test ($rules.Count -eq 1 -and $rules[0].AccessControlType -eq 'Allow' -and
+            $rules[0].IdentityReference.Translate([Security.Principal.SecurityIdentifier]) -eq
+            [Security.Principal.WindowsIdentity]::GetCurrent().User) 'Windows request file grants access only to the current user'
+    }
+    else {
+        Assert-Test ($script:directoryMode -eq
+            ([IO.UnixFileMode]::UserRead -bor [IO.UnixFileMode]::UserWrite -bor [IO.UnixFileMode]::UserExecute)) 'Unix request directory grants access only to the current user'
+    }
     $script:commandCleanupFailure = $true
     $errorRecord = Get-TestError { Invoke-PrivateRunCommand $configuration 'exit 1' @('Token=fake-test-value') }
     Assert-Test ($errorRecord.Exception -is [AggregateException] -and $errorRecord.Exception.InnerExceptions.Count -eq 2) 'Execution and cleanup failures are both retained'
@@ -192,10 +225,56 @@ try {
     Assert-Throws { Invoke-PrivateRunCommand $configuration 'exit 1' @('Token=fake-test-value') } 'Simulated guest failure' 'Guest execution failure is surfaced after successful cleanup'
     $script:guestResult = @{ executionState = 'Succeeded'; exitCode = 0; output = 'Initialized' }
     $script:nativeCalls = @()
-    $output = @(Invoke-PrivateRunCommand $configuration 'exit 0' @('Token=fake-test-value'))
-    Assert-Test ($output -contains 'Initialized' -and $script:nativeCalls.Count -eq 3) 'Successful execution still returns output and cleans up'
+    $largeScript = "printf 'bootstrap-test'`r`n" + ('# large bootstrap content' + "`r`n") * 4000
+    $largeToken = ('fake-token-claim' * 3000) + '=='
+    $output = @(Invoke-PrivateRunCommand $configuration $largeScript @("Token=$largeToken", 'Second=value=with=equals') 1800)
+    Assert-Test ($output -contains 'Initialized' -and $script:nativeCalls.Count -eq 4) 'Successful execution still returns output and cleans up'
+    Assert-Test (@($script:nativeCalls | Where-Object { ($_ -join ' ').Length -ge 8191 }).Count -eq 0) 'Oversized script and token keep every CLI invocation below the Windows command-line limit'
+    $wrapper = $script:requestBody.properties.source.script
+    $scriptBase64 = ($wrapper -split "'")[3]
+    Assert-Test ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($scriptBase64)) -ceq
+        $largeScript.Replace("`r`n", "`n")) 'File-backed transport preserves the full oversized script with Linux newlines'
+    Assert-Test ($script:requestBody.properties.protectedParameters[0].value -ceq $largeToken -and
+        $script:requestBody.properties.protectedParameters[1].value -ceq 'value=with=equals') 'Oversized protected values and embedded equals signs are preserved exactly'
+    Assert-Test ($script:requestBody.location -eq 'eastus' -and
+        $script:requestBody.properties.timeoutInSeconds -eq 1800 -and
+        $script:requestBody.properties.asyncExecution -eq $false) 'ARM request retains location, execution timeout and synchronous guest execution'
+    Assert-Test ($script:nativeCalls[1][0] -eq 'resource' -and $script:nativeCalls[1] -contains '--created' -and
+        $script:nativeCalls[1] -contains '1920') 'Asynchronous ARM provisioning is awaited before checking guest execution'
+    Assert-Test (@($script:requestPaths | Where-Object { Test-Path -LiteralPath (Split-Path $_) }).Count -eq 0) 'Every success and failure path removes its protected request directory'
+    $script:commandWaitFailure = $true
+    $script:nativeCalls = @()
+    Assert-Throws { Invoke-PrivateRunCommand $configuration 'exit 0' @() } 'wait timeout' 'Provisioning timeout is explicit'
+    Assert-Test ($script:nativeCalls.Count -eq 3 -and $script:nativeCalls[2][2] -eq 'delete' -and
+        -not (Test-Path -LiteralPath (Split-Path $script:requestPath))) 'Provisioning timeout still cleans remote command and local protected request'
+    Assert-Test (@($script:requestBody.properties.protectedParameters).Count -eq 0) 'Commands without protected parameters serialize an empty list'
+    $script:nativeCalls = @()
+    Assert-Throws { Invoke-PrivateRunCommand $configuration 'exit 0' @('invalid-secret-value') } 'expected Name=Value' 'Malformed protected parameters fail before issuing Azure commands'
+    Assert-Test ($script:nativeCalls.Count -eq 0) 'Invalid protected parameters cause no remote changes'
+    $script:commandWaitFailure = $false
+    $script:localRequestCleanupFailure = $true
+    $errorRecord = Get-TestError { Invoke-PrivateRunCommand $configuration 'exit 0' @('Token=fake-test-value') }
+    Assert-Test ($errorRecord.Exception.Message -match 'executed successfully but cleanup failed' -and
+        $errorRecord.Exception.Message.Contains((Split-Path $script:requestPath))) 'Local cleanup failure is explicit and identifies the protected directory to remove'
+    $script:initializationFailure = $true
+    $errorRecord = Get-TestError { Invoke-PrivateRunCommand $configuration 'exit 1' @('Token=fake-test-value') }
+    Assert-Test ($errorRecord.Exception -is [AggregateException] -and
+        $errorRecord.Exception.InnerExceptions.Count -eq 2 -and
+        $errorRecord.Exception.InnerExceptions[0].Message -eq 'Simulated initialization failure') 'Local cleanup failure never hides the primary execution failure'
+    $script:commandCleanupFailure = $true
+    $errorRecord = Get-TestError { Invoke-PrivateRunCommand $configuration 'exit 1' @('Token=fake-test-value') }
+    Assert-Test ($errorRecord.Exception -is [AggregateException] -and
+        $errorRecord.Exception.InnerExceptions.Count -eq 3) 'Simultaneous execution, remote cleanup and local cleanup failures are all retained'
 }
-finally { Set-Item -Path function:Invoke-CheckedCommand -Value $originalNative }
+finally {
+    Set-Item -Path function:Invoke-CheckedCommand -Value $originalNative
+    Microsoft.PowerShell.Management\Remove-Item -LiteralPath function:Remove-Item
+    foreach ($path in $script:requestPaths) {
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+        $parent = Split-Path $path
+        if (Test-Path -LiteralPath $parent) { Remove-Item -LiteralPath $parent -Force }
+    }
+}
 
 $originalApi = ${function:Invoke-GithubApi}
 $originalVariable = ${function:Set-GithubVariable}

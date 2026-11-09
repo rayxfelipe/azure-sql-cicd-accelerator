@@ -15,6 +15,9 @@ dependency and checks private-network/Entra controls in the compiled ARM templat
 Failure-path tests also cover preserved rerun metadata, simultaneous execution
 and cleanup errors, Azure deletion failures, checkpointed GitHub cleanup retries,
 replacement runners, and mismatched cleanup targets without calling live services.
+Run Command tests also cover oversized scripts/tokens, short CLI arguments,
+owner-only request-file permissions, provisioning waits, exact protected parameter
+values and temporary-file cleanup, including simultaneous local/remote cleanup failures.
 
 For workflow syntax/expression validation, run [actionlint](https://github.com/rhysd/actionlint)
 against all three workflows. Optional infrastructure security scanners such as
@@ -74,6 +77,16 @@ insertions parsed in their actual source locations. An isolated copy of the SQL
 project containing the documented `CustomerNote` column built with zero warnings
 and errors. No provisioning, PR, dev deployment or production promotion was
 executed by these documentation checks.
+
+Windows setup recovery checks on November 9 passed: all 99 regression tests,
+the DACPAC build, PowerShell/SQL/JSON checks, and Bicep compilation/topology
+invariants. A live file-backed request through Windows `az.cmd` executed a
+21,173-character script with a 20,000-character synthetic protected value on
+the isolated trial runner. The temporary Run Command was removed afterward;
+no SQL grants, schema, setup state or release gates were changed by this probe.
+Guest DNS checks also resolved SQL inside the configured private-endpoint subnet.
+These checks verify the command-line transport fix, not a complete setup rerun
+or a successful dev/production release.
 
 ## Maintainer source verification
 
