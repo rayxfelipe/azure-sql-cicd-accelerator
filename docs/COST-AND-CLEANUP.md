@@ -6,11 +6,45 @@ The topology creates **two Basic SQL databases, one Ubuntu VM with an OS disk,
 a NAT gateway and static egress IP, a private endpoint, and private DNS**.
 VNet/NSG/managed identities are also provisioned. A private network is not free.
 
-For this starter topology, use **USD 110-130/month continuously running** or
-**USD 50-65/month with the VM deallocated** only as rough historical planning
-estimates. These are **not current retail quotes** and not a billing guarantee.
-Region, VM size, taxes, transfer, NAT data processing, security tooling,
-GitHub plans and hosted-runner minutes affect actual costs.
+### Dated starter estimate: November 9, 2026
+
+The isolated West US 2 adoption environment was checked against Microsoft's
+[Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices).
+For that sizing, budget approximately **USD 120-130/month continuously running**
+or **USD 56-65/month with the runner VM deallocated for the whole month**.
+These are planning ranges, not a billing guarantee or a promise of future rates.
+
+| Resource | Monthly fixed-cost estimate (USD) |
+|---|---:|
+| One Linux `Standard_B2s_v2` runner at $0.0832/hour | 60.74 |
+| Standard NAT gateway at $0.045/hour | 32.85 |
+| Two Basic, 5-DTU SQL databases at $0.161/day each | 9.79 |
+| One private endpoint at $0.01/hour | 7.30 |
+| One Standard public IPv4 address at $0.005/hour | 3.65 |
+| One 32-GiB Standard HDD LRS OS disk | 1.54 |
+| One private DNS zone | 0.50 |
+| **Fixed-cost total** | **116.37** |
+
+Assumptions: **USD public pay-as-you-go rates and 730 hours/month**, before
+taxes, subscription discounts and credits. The planning ranges allow for light
+demo usage; they are not spending caps. NAT data processing ($0.045/GB),
+private-endpoint data processing (initial tier $0.01/GB in each direction),
+applicable bandwidth, DNS queries, disk operations and any additional backup
+usage can add charges. Different regions/SKUs, security tooling and other
+resource groups are outside this estimate. GitHub plans, storage and
+hosted-runner minutes may incur separate GitHub charges.
+
+Deallocating the VM removes about **USD 60.74/month** of compute if it stays
+deallocated all month, leaving a fixed-cost floor of about **USD 55.63/month**.
+Starting it for demos adds approximately $0.0832 per running hour. The runner
+must be online for deployments; do not deallocate it during an active workflow.
+Confirm **Stopped (deallocated)** rather than merely shutting down Linux;
+[allocated stopped VMs remain compute-billed](https://learn.microsoft.com/en-us/azure/virtual-machines/states-billing).
+SQL, disk, NAT, public IP, private endpoint and DNS charges continue.
+
+Keeping only the GitHub repository does not require Azure hosting. Each
+separately provisioned customer environment incurs its own Azure costs; multiple
+people viewing one reference environment do not multiply its fixed charges.
 
 Check [Azure Pricing Calculator](https://azure.microsoft.com/en-us/pricing/calculator/)
 for your selected region/SKU and establish an Azure budget/alert before `-Apply`.

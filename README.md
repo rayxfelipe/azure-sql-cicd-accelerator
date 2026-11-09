@@ -39,26 +39,39 @@ GitHub usage charges may apply separately.
 Commands below use **PowerShell 7.4+ on Windows**. Run them in the same terminal,
 from your new repository root unless told otherwise. Replace all `YOUR-...`
 placeholders. Stop at any failed check; do not bypass setup gates.
-If you open a new terminal, return to your cloned repository root. Once
-`config/setup.json` exists, restore `$Repository` with
-`$Repository = (Get-Content config\setup.json -Raw | ConvertFrom-Json).repository`.
+The primary path uses the **GitHub UI** to create the repository and dispatch
+workflows, and **PowerShell** for local setup, editing and Git commands.
+[Optional CLI alternatives](#optional-cli-alternatives) are separate; do not
+dispatch the same workflow through both routes.
+If resuming an existing setup, use [Returning later](#returning-later) rather
+than creating another repository or overwriting its configuration.
 
 ### 1. Check prerequisites
 
-- Install [PowerShell 7](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-windows),
+**Before you begin, confirm all four items:**
+
+- [ ] **Tools:** [PowerShell 7.4+](https://learn.microsoft.com/en-us/powershell/scripting/installing-powershell-on-windows),
   [.NET SDK 10](https://dotnet.microsoft.com/en-us/download/dotnet/10.0),
-  [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-windows),
+  [Azure CLI with Bicep](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-windows),
   [GitHub CLI](https://cli.github.com/) and [Git](https://git-scm.com/downloads/win).
   Enable the [OpenSSH client](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse)
   for `ssh-keygen`. Use `pwsh`, not Windows PowerShell 5.1.
-- You need repository administrator access and a GitHub plan that supports
+- [ ] **GitHub access and plan:** access to the source template, repository
+  administrator rights on your new copy, and a plan that supports
   environments/branch policies in **private** repositories: personal Pro,
   organization Team, or applicable Enterprise. GitHub Free is insufficient for
   this private deployment flow; do not make the deployment repository public
-  as a workaround. See [GitHub environment availability](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
-- Arrange the [initial Azure and SQL setup permissions](docs/SETUP.md#initial-setup-permissions-versus-routine-releases).
-  Confirm regional VM quota, Azure policy compatibility and the
-  [cost estimate](docs/COST-AND-CLEANUP.md) before applying.
+  as a workaround. Actions and repository self-hosted runners must be allowed.
+  See [GitHub environment availability](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments).
+- [ ] **Azure and SQL setup access:** permission to provision resources and
+  assign the required role in the target subscription, plus an Entra SQL
+  administrator user/group that the setup operator can use.
+  Arrange the [full initial setup permissions](docs/SETUP.md#initial-setup-permissions-versus-routine-releases)
+  before starting; routine deployment permissions are not sufficient.
+- [ ] **An isolated, approved target:** a new dedicated resource group, permitted
+  network ranges/SKUs, sufficient regional VM quota and compatible Azure policies.
+  Review the [cost estimate](docs/COST-AND-CLEANUP.md#cost-before-applying) and
+  arrange a budget/alert before applying.
 
 In a PowerShell 7 terminal:
 
@@ -163,6 +176,13 @@ is sufficient to proceed.
 
 ### 5. Apply setup (creates billable Azure resources)
 
+> **Budget checkpoint:** allow approximately **USD 120-130/month** for the
+> starter topology running continuously in West US 2, or **USD 56-65/month**
+> with the runner VM deallocated. These November 9, 2026 retail-based planning
+> ranges assume 730 hours/month, before taxes, discounts and credits; region,
+> sizing and usage change the total. SQL, disk and networking remain billable
+> when the VM is deallocated. See the [dated breakdown](docs/COST-AND-CLEANUP.md#cost-before-applying).
+
 Review the what-if, [costs and cleanup](docs/COST-AND-CLEANUP.md), then explicitly
 opt in:
 
@@ -182,12 +202,9 @@ approval, approve the verification jobs in GitHub during this wait.
 Check your repository's **Settings > Actions > Runners**: its private runner
 must be **Idle/online**, not Offline.
 
-```powershell
-gh variable list --repo $Repository
-gh api "repos/$Repository/actions/runners" --jq '.runners[] | {name,status,busy}'
-```
-
-`SETUP_COMPLETE` must be `true` and `SETUP_IN_PROGRESS` must be `false`.
+Under **Settings > Secrets and variables > Actions > Variables**, confirm the
+repository variables `SETUP_COMPLETE=true` and `SETUP_IN_PROGRESS=false`.
+[Optional CLI checks](#check-setup-readiness) are available below.
 On failure, deployments remain disabled but resources may incur charges.
 Fix the reported problem and rerun **the same configuration**; never manually
 set the completion gate. Preserve `.azure/setup-state.json` and the SSH keys.
@@ -199,15 +216,9 @@ See [setup failures](docs/SETUP.md#reruns-and-failures).
 
 In **your new private deployment repository > Actions** (not the accelerator
 template), select **Database CI and dev deployment > Run workflow**, choose
-branch **main**, and run it. You can reopen the correct repository with
-`gh repo view $Repository --web`.
-
-Alternatively, dispatch it from your PowerShell terminal with the command
-below. Use **either** the GitHub UI **or** this CLI command, not both:
-
-```powershell
-gh workflow run database-ci.yml --repo $Repository --ref main
-```
+branch **main**, and run it once.
+The [optional CLI equivalent](#dispatch-the-initial-dev-workflow) is separate
+from this primary UI path.
 
 Open the newly created run in GitHub. Both `build` **and** `deploy-dev` must
 succeed, including **Deploy dev and run SQL smoke tests**. Expect the smoke-test
@@ -283,28 +294,18 @@ ID**: it is the numeric value after `/actions/runs/` in the run URL, **not** the
 displayed run number, job ID or artifact ID.
 
 If you did not save it, reopen that run under **your repository > Actions** and
-copy the number from its URL, or list recent push-to-main runs:
-
-```powershell
-gh run list --repo $Repository --workflow database-ci.yml --branch main --event push --limit 5 --json databaseId,displayTitle,status,conclusion,url
-```
-
-Use the `databaseId` for your merged change. Open its `url` and confirm
+copy the number from its URL. Confirm it belongs to your merged change and that
 `deploy-dev` and its SQL smoke-test step succeeded; a workflow-level `success`
 can also describe an earlier build-only run.
+An [optional CLI lookup](#recover-a-dev-run-id) is available below.
 
 ### 8. Promote that exact dev artifact to production
 
 In **the same new private deployment repository**, open **Actions > Promote
 verified database to production > Run workflow**.
 Choose **main** and enter the successful **post-merge dev run ID** from step 7
-as `source_run_id`. Alternatively, dispatch it from PowerShell below; use the
-UI or CLI, not both:
-
-```powershell
-$DevRunId = 'YOUR-SUCCESSFUL-POST-MERGE-DEV-RUN-ID'
-gh workflow run promote-production.yml --repo $Repository --ref main -f "source_run_id=$DevRunId"
-```
+as `source_run_id`, then run it once.
+The [optional CLI equivalent](#dispatch-production-promotion) is available below.
 
 Approve deployment if a production reviewer gate is configured.
 **Expected:** `validate-source` and `deploy-production` both pass. The validator
@@ -322,6 +323,22 @@ approvals where supported; setup creates main-only environments, not branch
 protection or two-person approval. Rerun/recovery/cleanup acceptance and broader
 production hardening remain separate [release checks](docs/VALIDATION.md).
 
+### Completion checklist
+
+- [ ] **Setup complete (step 5):** `Setup verified` printed, all four OIDC/SQL
+  readiness jobs passed, and the private runner is online.
+- [ ] **Initial dev release (step 6):** `build`, `deploy-dev` and SQL smoke tests
+  passed; a skipped deployment does not count.
+- [ ] **PR validation (step 7):** `build` passed and `deploy-dev` was skipped.
+- [ ] **Merged dev release (step 7):** the push-to-main deployment and smoke tests,
+  including the new column assertion, passed; save its run URL/ID.
+- [ ] **Production promotion (step 8):** source validation, exact-artifact
+  deployment and production SQL smoke tests passed; save the promotion URL.
+
+The first checkbox means setup is ready for releases. **All five** mean the
+end-to-end happy-path walkthrough passed, not that every production-hardening
+or recovery check is complete.
+
 ### When you finish
 
 Keep the resources for further testing, or follow
@@ -329,6 +346,84 @@ Keep the resources for further testing, or follow
 Deallocation still incurs SQL/network/disk charges. To permanently remove the
 isolated test environment, review the
 [destructive cleanup instructions](docs/COST-AND-CLEANUP.md#isolated-cleanup).
+
+### Returning later
+
+1. Reopen **the same local deployment repository** in VS Code and use PowerShell
+   7 from its root. Keep `config/setup.json`, `.azure/setup-state.json` and the
+   SSH keys; do not recreate or overwrite them merely to resume.
+2. Restore the terminal settings and repository name, and confirm the remote
+   still points to your private copy:
+
+   ```powershell
+   $ErrorActionPreference = 'Stop'
+   $PSNativeCommandUseErrorActionPreference = $true
+   $Repository = (Get-Content config\setup.json -Raw | ConvertFrom-Json).repository
+   git remote get-url origin
+   ```
+
+   Renew GitHub/Azure sign-in if necessary, using the original configured
+   tenant/subscription and repository. Do not change configuration to match an
+   unintended signed-in account.
+3. If deallocated, **start the existing runner VM** before deployment or
+   verification. Wait for **Settings > Actions > Runners** in your repository to
+   show it **Idle/online**. See [runner lifecycle](docs/OPERATIONS.md#runner-lifecycle).
+   Starting the VM resumes compute charges; completed setup does not need
+   `-Apply` again just because its VM was deallocated.
+4. Resume from the appropriate completion checkpoint. If a dev artifact expired
+   after **14 days**, dispatch a fresh main-branch dev release as in step 6,
+   verify deployment/smoke tests, and promote that new run as in step 8.
+   Do not repeat the `CustomerNote` edit if it is already merged, or rebuild
+   production separately. For incomplete setup, follow
+   [same-configuration recovery](docs/SETUP.md#reruns-and-failures).
+
+## Optional CLI alternatives
+
+These are alternatives to the GitHub UI actions above, not additional steps.
+Use PowerShell in your new deployment repository and ensure `$Repository`
+identifies that private copy. If needed, restore it using
+[Returning later](#returning-later). Use **one** dispatch method per run.
+
+### Check setup readiness
+
+```powershell
+gh variable list --repo $Repository
+gh api "repos/$Repository/actions/runners" --jq '.runners[] | {name,status,busy}'
+```
+
+Require `SETUP_COMPLETE=true`, `SETUP_IN_PROGRESS=false` and an online runner;
+never set the variables manually to bypass readiness.
+
+### Dispatch the initial dev workflow
+
+```powershell
+gh workflow run database-ci.yml --repo $Repository --ref main
+```
+
+Open the run in your repository's Actions page and apply the success checks
+from [step 6](#6-deploy-the-initial-schema-to-dev). To open the repository in a
+browser, use `gh repo view $Repository --web`; this command does not dispatch a run.
+
+### Recover a dev run ID
+
+```powershell
+gh run list --repo $Repository --workflow database-ci.yml --branch main --event push --limit 5 --json databaseId,displayTitle,status,conclusion,url
+```
+
+For step 7, select the post-merge run for your change. Use its `databaseId` only
+after opening its `url` and confirming `deploy-dev` and SQL smoke tests passed.
+This lookup filters to push events; manual step-6 runs are not listed.
+
+### Dispatch production promotion
+
+```powershell
+$DevRunId = 'YOUR-SUCCESSFUL-POST-MERGE-DEV-RUN-ID'
+gh workflow run promote-production.yml --repo $Repository --ref main -f "source_run_id=$DevRunId"
+```
+
+Use the validated dev run ID, not a PR run, displayed run number or artifact ID.
+Apply the success checks from [step 8](#8-promote-that-exact-dev-artifact-to-production),
+including any configured production approval.
 
 ## Working with the accelerator
 
