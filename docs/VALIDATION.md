@@ -59,6 +59,22 @@ accelerator does not automatically provision Azure, run SQL smoke tests or prove
 fresh-repository deployment. Complete the checklist above before claiming
 end-to-end adoption.
 
+On November 9, 2026, maintainer review confirmed the
+[November 4 readiness run](https://github.com/rayxfelipe/azure-sql-cicd-accelerator/actions/runs/41915540588)
+explicitly passed `OIDC (dev)`, `OIDC (production)`, `SQL (dev)` and
+`SQL (production)`. This is live OIDC/private SQL readiness evidence, not proof
+of a DACPAC deployment, a fresh customer repository, rerun recovery or cleanup.
+No production promotion run was present at that review. The README quick start
+now provides the customer-executed dev/PR/production acceptance path; passing its
+documentation checks is not a claim that those live releases have been run.
+
+Quick-start documentation checks on November 9 passed: 25 relative file/heading
+links resolved, 16 PowerShell example blocks parsed, and both SQL example
+insertions parsed in their actual source locations. An isolated copy of the SQL
+project containing the documented `CustomerNote` column built with zero warnings
+and errors. No provisioning, PR, dev deployment or production promotion was
+executed by these documentation checks.
+
 ## Maintainer source verification
 
 Verified November 2, 2026:
@@ -74,4 +90,5 @@ Verified November 2, 2026:
 | [Initial hosted credential-free CI](https://github.com/rayxfelipe/azure-sql-cicd-accelerator/actions/runs/41568749901) | Build passed; dev deployment was skipped because setup is incomplete. |
 | Baseline | Original revision and clean working tree retained unchanged. |
 | Checkov | Not installed; no Checkov scan is claimed. |
-| New Azure provisioning / live SQL deployment / end-to-end adoption | Not executed. Requires an isolated adopter environment and explicit setup apply. |
+| Live readiness (subsequent November 4 run) | Both OIDC and both private SQL readiness jobs passed; see the linked evidence above. |
+| Initial setup provisioning path / live DACPAC releases / end-to-end adoption | Not established by readiness alone. Complete the isolated customer walkthrough and record its actual release, rerun and cleanup evidence. |

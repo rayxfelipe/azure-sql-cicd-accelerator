@@ -1,5 +1,8 @@
 # Releases and operations
 
+For a first deployment and a concrete additive PR example, follow
+[quick start steps 6-8](../README.md#6-deploy-the-initial-schema-to-dev).
+
 ## Pull requests and dev releases
 
 PRs targeting `main` run on GitHub-hosted Windows runners with `contents: read`
@@ -76,6 +79,10 @@ az vm deallocate --subscription $state.deployment.subscriptionId `
 Deallocation stops compute billing, not disk/NAT/IP/SQL/private-endpoint charges.
 An offline runner causes queued jobs; start it rather than bypassing private DNS.
 No inbound SSH is required; administrators use protected Azure Run Command.
+
+If the original setup checkout is unavailable, retrieve its saved state/key pair
+from the setup operator rather than guessing resource names. Do not run these
+commands against the template maintainer's or baseline VM.
 
 Do not copy baseline contained users into the SQL project. Existing databases
 require a reviewed schema import/baseline and migration strategy; the sample

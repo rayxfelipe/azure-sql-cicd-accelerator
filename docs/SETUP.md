@@ -18,6 +18,10 @@
 - Run only one setup/cleanup operation for a repository at a time. Existing
   workflows must be finished before rerunning infrastructure setup.
 
+For the full customer sequence, start with the
+[README quick start](../README.md#quick-start). These notes explain permissions,
+configuration and recovery; they do not replace the dev/PR/production walkthrough.
+
 ## Initial setup permissions versus routine releases
 
 | Actor | Required access |
@@ -37,6 +41,28 @@ Role Based Access Control Administrator on the dedicated group for Reader
 assignment. Have the platform team arrange those scopes before provisioning.
 Remove temporary elevation after setup. Do not grant deployment identities
 Contributor, SQL administrator or `db_owner`.
+
+## Finding the SQL setup administrator
+
+Use the Entra identity that is actually running `az login` for the target tenant.
+For an interactive user setup, after selecting your tenant/subscription:
+
+```powershell
+az account show --query '{subscriptionId:id,tenantId:tenantId}' --output table
+az ad signed-in-user show --query '{objectId:id,displayName:displayName}' --output json
+```
+
+Put `objectId` into `administratorObjectId`, `displayName` into
+`administratorLogin`, and use `administratorPrincipalType: "User"`.
+For a guest account, use the guest's object ID **in the target tenant**, not its
+home-tenant ID. If Microsoft Graph lookup is blocked by policy, obtain those
+values from the target tenant's Microsoft Entra **Users** page or your tenant
+administrator; do not substitute a subscription ID or an application's client ID.
+
+Alternatively, have your platform team provide an Entra group's object ID and
+display name, use `administratorPrincipalType: "Group"`, and ensure the signed-in
+setup operator is a member. The deployment identities created by Bicep must
+**not** be chosen as SQL administrator.
 
 ## Configuration
 
@@ -67,7 +93,8 @@ are configurable starter values, not a quota or capacity guarantee.
 ## Preview and apply
 
 ```powershell
-az login
+az login --tenant 'YOUR-TENANT-ID'
+az account set --subscription 'YOUR-SUBSCRIPTION-ID'
 gh auth login
 .\scripts\Setup-Accelerator.ps1 -ConfigurationPath config\setup.json
 .\scripts\Setup-Accelerator.ps1 -ConfigurationPath config\setup.json -Apply
@@ -128,7 +155,27 @@ or local setup state if they contain sensitive environment details.
 
 After successful setup, dispatch **Database CI and dev deployment** for the
 initial schema deployment. Readiness is not a claim that a DACPAC release passed.
-Then follow [the fresh-adoption acceptance steps](VALIDATION.md).
+Continue with [quick start step 6](../README.md#6-deploy-the-initial-schema-to-dev)
+through production promotion, then follow [the remaining adoption checks](VALIDATION.md).
+
+## Authentication and common blockers
+
+| Symptom | Check / action |
+|---|---|
+| Private template or customer repository not found | Sign into the correct GitHub account and request source-template access if it is still private. Set `repository` to your new private copy and verify its `origin`. |
+| GitHub API 403 / environment creation unavailable | Verify repository admin rights, organization SSO, token permissions, Actions policies and the GitHub plan's private-environment support. Do not switch to a public deployment repository to bypass this. |
+| Git push reports insufficient OAuth scope | For a GitHub CLI OAuth login, use `gh auth refresh --hostname github.com --scopes repo,workflow`, then reauthorize organization SSO as required. Fine-grained tokens/app credentials need equivalent permitted operations; an OAuth refresh does not repair those credentials. Never paste tokens into source/config. |
+| Git commit reports an unknown author identity | Set `git config user.name "YOUR-NAME"` and `git config user.email "YOUR-APPROVED-COMMIT-EMAIL"` inside the customer repository, then retry. Use your organization's approved commit identity. |
+| Azure permission or provider-registration failure | Confirm the selected tenant/subscription and ask the platform team to provide the setup permissions above. Routine deployment identities are not setup operators. |
+| Entra SQL bootstrap rejects the operator | Verify the configured administrator user/group is in the target tenant and the signed-in operator is that user/a member. Renew `az login` if group membership changed. |
+| VM SKU, quota, address-range or policy failure | Select approved available sizing/region/networks before the first apply. After state is saved, do not edit targets or discard state to force a rerun; resolve the blocker or deliberately clean up and start an isolated new adoption. |
+| Setup refuses an active main-branch run | Let that run finish, or cancel it deliberately in GitHub, then rerun the same configuration. Setup intentionally does not alter infrastructure during releases. |
+| Verification waits or a deployment is queued | Check environment approval requests and the runner's online status. See [runner lifecycle](OPERATIONS.md#runner-lifecycle); do not open public SQL access or manually enable setup gates. |
+| Green workflow, but deployment skipped | Check job-level results, the main branch and setup variables. Build-only success is not a dev release and cannot be promoted. |
+
+If this checkout has no `.azure/setup-state.json` but resources were provisioned
+elsewhere, recover that original setup checkout/state from its operator. Do not
+reconstruct configuration by guessing or point a new test at baseline resources.
 
 ## References
 
