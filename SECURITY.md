@@ -14,9 +14,10 @@ Never enable deployment gates manually to bypass readiness.
 
 ## Reporting a concern
 
-Use the repository's **Security > Report a vulnerability** option when available.
-If private reporting is not yet available, request a private reporting channel
-from the maintainer without including sensitive details in an issue.
+Use **Security > Report a vulnerability** to report privately to the distribution
+repository; private vulnerability reporting is enabled there. Adopter copies
+must configure their own reporting channel. If private reporting is unavailable
+in a copy, request a private channel without including sensitive details in an issue.
 Do not post credentials, access tokens, private keys, customer data or unredacted
 setup state/logs in public issues, pull requests or discussions.
 
@@ -38,6 +39,14 @@ SqlPackage, PowerShell SqlServer module and runner distribution are separately
 pinned; review their vendor advisories and supported versions when updating.
 NuGet package auditing alone does not cover every library bundled inside these
 tools.
+
+The public distribution repository requires pull requests and successful
+`build`/`security` checks on an up-to-date branch, including for administrators.
+Force pushes and branch deletion are disabled. The sole-maintainer policy uses
+zero mandatory approvals; it does not provide two-person review. External
+contributors' workflow runs require maintainer approval. GitHub secret scanning
+and push protection are enabled in addition to the local Gitleaks workflow;
+neither guarantees that every secret or identifier will be detected.
 
 ## Infrastructure preview exceptions
 

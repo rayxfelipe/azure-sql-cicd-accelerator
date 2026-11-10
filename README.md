@@ -6,8 +6,8 @@ changes through GitHub Actions. No SQL passwords or client secrets.
 
 **Preview:** use isolated resources and synthetic data. Review the
 [security policy and documented infrastructure exceptions](SECURITY.md) before
-adoption. The distribution repository is build-only; Azure releases belong in
-your own private deployment repository.
+adoption. The public distribution repository is build-only; Azure releases
+belong in your own private deployment repository.
 
 ## Architecture
 
@@ -97,7 +97,8 @@ If Bicep is missing, run `az bicep install`, then repeat its version check.
 On the template's GitHub page, select **Use this template > Create a new
 repository**. Choose your account/organization, a unique name such as
 `azure-sql-cicd-trial`, and **Private**. Keep the default branch `main`; copying
-all branches is unnecessary. A private template requires access to its source.
+all branches is unnecessary. The source template is public; your deployment
+repository must still be private.
 
 **Complete both actions:** first create your repository in the GitHub UI, then
 clone that new repository using the PowerShell commands below. They are not
@@ -476,8 +477,8 @@ Yes, for the Azure infrastructure portion. Microsoft's
 [Deploy to Azure button](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deploy-to-azure-button)
 loads a remotely accessible **ARM JSON** template, not a Bicep source file.
 Subscription scope is supported, so this topology could be compiled and
-published for that path. The current private source repository would need an
-accessible template-hosting solution.
+published for that path. Public source visibility now permits template hosting,
+but no ARM template entry point or portal button is published.
 
 However, a standard portal deployment does not by itself create/configure your
 private GitHub repository, establish repository-specific OIDC subjects, register
