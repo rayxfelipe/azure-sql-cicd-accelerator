@@ -1,39 +1,39 @@
 # Releases and operations
 
-For a first deployment and a concrete additive PR example, follow
+Use this reference after [setup](SETUP.md) and
+[deployment validation](VALIDATION.md). For your first release, follow
 [quick start steps 6-8](../README.md#6-deploy-the-initial-schema-to-dev).
+Operate only your own private deployment repository and its resources.
 
 ## Pull requests and dev releases
 
-PRs targeting `main` run on GitHub-hosted Windows runners with `contents: read`
-only. They validate PowerShell/JSON, run regression tests, compile Bicep and
-build the DACPAC. They never run on the private runner and cannot request Azure
-OIDC tokens.
+| Action | Result |
+|---|---|
+| Open a PR targeting `main` | Hosted validation/build with `contents: read`; no Azure OIDC token, private runner or SQL deployment. |
+| Merge a change covered by the CI workflow, or dispatch CI on `main` | Builds the release artifact, then deploys dev only if setup is complete and not in progress. The private runner uses a repository-specific label. |
 
-Trusted pushes to `main` or manual main-branch CI dispatches use the same build
-and artifact. Dev deployment runs only when setup is complete and not in
-progress. Repository-ID-specific runner labels isolate repositories. SQL
-publication blocks possible data loss, retains objects absent from source and
-does not manage security principals, permissions or database options.
-
-Smoke tests assert database/user identity, absence of `db_owner`, the sample
-table/view, the Priority default and query behavior. They roll back synthetic
-data on both success and failure, then confirm it is gone.
+SQL publication blocks possible data loss, retains objects absent from source,
+and does not manage security principals, permissions or database options.
+Smoke tests check identity/permissions and sample schema behavior, then roll back
+synthetic data on success or failure and confirm it is gone.
+Existing databases require a reviewed schema import/baseline and migration
+strategy; do not copy deployment users into the SQL project.
 
 ## Production promotion
 
-Dispatch `promote-production.yml` from `main` with the successful dev CI run ID.
-The hosted validator requires:
+In **Actions > Promote verified database to production**, select `main` and enter
+the successful dev CI run ID as `source_run_id`. The validator requires:
 
 - A completed successful `database-ci.yml` run from this repository.
 - `main` branch and a trusted `push` or `workflow_dispatch` event.
 - An explicitly successful `deploy-dev` job, not skipped/failed/cancelled.
 - Exactly one unexpired `database-release` artifact.
 
+Confirm `validate-source`, `deploy-production` and production smoke tests pass.
 The private production job downloads that **artifact ID from that source run**,
-including its DACPAC and deployment scripts. It does not rebuild or check out
-new SQL source. Artifact retention is 14 days; create another verified dev
-release if the artifact has expired.
+including the DACPAC and scripts; it does not rebuild or check out new SQL source.
+Save source/promotion run URLs, commit and artifact ID. If the artifact expired
+after 14 days, create a new successful dev release before promoting.
 
 Set production required reviewers and prevent self-review where supported.
 Protect `main` with reviewed changes and required CI. The default manual dispatch
@@ -56,27 +56,41 @@ Environment variables in `dev` and `production`:
 `SQL_DATABASE_NAME`, `SQL_DEPLOYMENT_USER`, `SQL_PRIVATE_ENDPOINT_CIDR`,
 `EXPECTED_OIDC_SUBJECT`.
 
-These identifiers are configuration, not credentials. Setup does not store
-Azure client secrets, SQL passwords or long-lived runner registration tokens.
-Never manually set `SETUP_COMPLETE=true` to bypass a failed setup.
+These identifiers are configuration, not credentials, but can reveal environment
+details. Setup does not store Azure client secrets, SQL passwords or long-lived
+runner registration tokens. Never manually set `SETUP_COMPLETE=true` to bypass
+a failed setup; follow [setup recovery](SETUP.md#reruns-and-failures).
 
 ## Runner lifecycle
 
-Keep the VM running during setup, deployment and verification. To start or stop
-the **adopter's** VM, load the local setup state:
+Keep the VM running during setup, deployment and verification. Run the following
+in the same PowerShell 7 session from your original setup checkout.
+
+**Start the existing VM** using your saved state:
 
 ```powershell
 $state = Get-Content .azure\setup-state.json -Raw | ConvertFrom-Json
 az vm start --subscription $state.deployment.subscriptionId `
   --resource-group $state.deployment.resourceGroup --name $state.deployment.runnerVm
+```
+
+**Wait for the runner to be idle/online** before dispatching:
+
+```powershell
 gh api "repos/$($state.configuration.repository)/actions/runners" `
   --jq '.runners[] | {name,status,busy}'
-# Only after all deployments finish:
+```
+
+**Deallocate only after all deployment/verification jobs finish** and no queued
+release needs the runner:
+
+```powershell
 az vm deallocate --subscription $state.deployment.subscriptionId `
   --resource-group $state.deployment.resourceGroup --name $state.deployment.runnerVm
 ```
 
-Deallocation stops compute billing, not disk/NAT/IP/SQL/private-endpoint charges.
+Confirm **Stopped (deallocated)**; shutting down Linux alone can leave compute
+billed. SQL, disk and network charges continue; see [costs](COST-AND-CLEANUP.md).
 An offline runner causes queued jobs; start it rather than bypassing private DNS.
 No inbound SSH is required; administrators use protected Azure Run Command.
 
@@ -84,6 +98,4 @@ If the original setup checkout is unavailable, retrieve its saved state/key pair
 from the setup operator rather than guessing resource names. Do not run these
 commands against the template maintainer's or baseline VM.
 
-Do not copy baseline contained users into the SQL project. Existing databases
-require a reviewed schema import/baseline and migration strategy; the sample
-project is intended for fresh isolated databases.
+For permanent removal, follow [isolated cleanup](COST-AND-CLEANUP.md#isolated-cleanup).

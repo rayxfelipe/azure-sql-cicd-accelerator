@@ -1,33 +1,20 @@
 # Understand your deployment
 
-After guided setup, you have a private-network foundation for Azure SQL releases
-from your own private GitHub repository. After completing the
-[quick-start release walkthrough](../README.md#6-deploy-the-initial-schema-to-dev),
-you also have a reviewed schema change deployed to dev and promoted to production
-using the exact same verified artifact.
-
-Use this guide to understand your resource group, explain the design to others,
-or run a short customer demonstration. It describes the template's intended
-topology, not a live health report or proof that your deployment succeeded.
-Check your own resources and [acceptance evidence](VALIDATION.md).
+Use this guide to identify your Azure resources and explain the design in a
+customer walkthrough. It describes the intended topology, not a live health
+report. Follow [Validate your deployment](VALIDATION.md) to check your own results.
 
 ## What completion means
 
-These are different milestones:
+- **Setup:** infrastructure, GitHub configuration and SQL grants are ready, with
+  both environments' OIDC/private SQL checks passed.
+- **Initial release:** a DACPAC (compiled SQL schema package) is deployed to dev
+  and smoke-tested.
+- **Reviewed promotion:** a PR validates without Azure access; merging deploys
+  dev; production reuses that verified artifact without rebuilding.
 
-- **Guided setup:** provisions infrastructure, configures GitHub and SQL
-  deployment permissions, and verifies both environments' OIDC/private SQL
-  readiness before enabling releases.
-- **Initial dev release:** builds a DACPAC (the compiled SQL schema package),
-  publishes the sample schema to dev, and runs rollback smoke tests.
-- **Reviewed change and promotion:** a PR validates without Azure access; merging
-  deploys dev; a separate production dispatch validates and reuses that dev
-  release's exact artifact without rebuilding.
-
-Setup alone does not publish the sample schema or prove production promotion.
-The deployment identities receive explicit SQL grants, not SQL administrator
-access or membership in `db_owner`. The initial setup operator needs broader
-[setup permissions](SETUP.md#initial-setup-permissions-versus-routine-releases).
+Setup alone does not publish the schema. Complete the
+[release walkthrough](../README.md#6-deploy-the-initial-schema-to-dev).
 
 ## What is in your Azure resource group?
 
@@ -38,15 +25,15 @@ maintainer's or another adopter's resources.
 
 | Purpose | Expected resources / naming patterns | Why they exist |
 |---|---|---|
-| Database hosting | Logical SQL server `sql-<prefix>-<suffix>` | Hosts both databases and their shared Entra administrator/private-access settings. This is a managed logical server, not another VM. |
+| Database hosting | Logical SQL server `sql-<prefix>-<suffix>` | Hosts both databases and shared access settings; it is not another VM. |
 | Deployment targets | `sqldb-<prefix>-dev`, `sqldb-<prefix>-prod` | Separate dev and production databases; the starter uses Basic, 5-DTU sizing for each. |
-| Passwordless deployment identities | `id-<prefix>-dev`, `id-<prefix>-prod` | Separate user-assigned managed identities with repository/environment-specific GitHub OIDC federation and contained SQL users. Neither identity is attached to the runner VM. |
-| Private execution | `vm-<prefix>-runner`, its managed OS disk and `nic-<prefix>-runner` | One persistent Ubuntu runner executes SQL deployment and verification inside the VNet. The VM has no public IP or managed identity; Linux password authentication is disabled. |
+| Deployment identities | `id-<prefix>-dev`, `id-<prefix>-prod` | Separate managed identities with repository/environment-specific OIDC trust and SQL users. Neither is attached to the VM. |
+| Private execution | `vm-<prefix>-runner`, its OS disk and `nic-<prefix>-runner` | One persistent Ubuntu runner, with no public IP or managed identity and no Linux password authentication. |
 | Network separation | `vnet-<prefix>` with `runner` and `private-endpoints` subnets | Separates runner compute from the SQL private endpoint. |
 | Runner inbound protection | `nsg-<prefix>-runner` | Attached to the runner subnet, with an explicit deny-all-inbound rule. The supported setup does not require inbound SSH. |
-| Outbound connectivity | `nat-<prefix>`, `pip-<prefix>-egress` | Lets the runner initiate outbound connections to GitHub, Azure services and package sources. This public IP is for outbound NAT, not inbound access to the VM or SQL. |
-| Private SQL access | `pe-<prefix>-sql` and its generated network interface | Connects the VNet privately to the SQL server, serving both databases. The private endpoint connection should be approved. |
-| Private name resolution | `privatelink.database.windows.net`, its VNet link and the endpoint's DNS zone group | Lets the normal SQL server hostname resolve to its private-endpoint address from the runner network. |
+| Outbound connectivity | `nat-<prefix>`, `pip-<prefix>-egress` | Outbound access to GitHub, Azure services and packages; not an inbound VM/SQL endpoint. |
+| Private SQL access | `pe-<prefix>-sql` and its generated network interface | Private access to the server for both databases; the connection should be approved. |
+| Private DNS | `privatelink.database.windows.net`, its VNet link and endpoint DNS zone group | Resolves the normal SQL hostname to its private-endpoint address inside the runner network. |
 
 Regional resources use your configured Azure region; the private DNS zone and
 its link use the `global` location. The infrastructure definitions are in
@@ -56,18 +43,13 @@ its link use the `global` location. The infrastructure definitions are in
 
 ### Why your resource count may differ
 
-Do not use a fixed resource count as a readiness test. Azure Portal and CLI
-views may include different child/system resources:
+Do not use a fixed resource count as a readiness test:
 
 - SQL's `master` is a system database, not a third application environment.
-- The VM's OS disk and the private endpoint's network interface have generated
-  names. They support existing components, not additional runners.
-- Federated credentials, role assignments, DNS records/links and zone groups
-  may appear under their parent resources or separate inventory views. The
-  identities' Azure Reader assignments are separate from their SQL grants.
-- Azure policy or later operator changes may add resources, such as another
-  subnet NSG. Inspect their actual associations and rules; do not assume they
-  are part of the template or delete them merely because they are additional.
+- Disks/NICs have generated names. Child resources such as federation, role
+  assignments and DNS records may appear in different inventory views.
+- Policy or operator changes may add resources, such as another subnet NSG.
+  Inspect their associations/rules; do not delete them just because they are additional.
 
 GitHub environments (`dev`, `production`), variables, workflows, runner
 registration and build artifacts are **GitHub objects**, not Azure resources.
@@ -76,25 +58,21 @@ to your own private adopter repository.
 
 ## How the components work together
 
-Keep three different connections clear:
+1. **Execution:** the private runner connects outward to GitHub for deployment
+   jobs. PR builds use GitHub-hosted runners. No inbound GitHub connection is needed.
+2. **Authentication:** a trusted job uses short-lived GitHub OIDC federation to
+   sign into Azure as the environment's identity and obtain an Entra SQL token.
+   Explicit SQL grants, not administrator access or `db_owner`, authorize deployment.
+   Setup stores no Azure client secret or SQL password. Azure Reader role
+   assignments and SQL grants serve different purposes.
+3. **Connectivity:** private DNS resolves SQL through the private endpoint.
+   Public SQL access is disabled, authentication is Entra-only, and minimum
+   TLS is 1.2. NAT serves outbound connections, not this private SQL path.
 
-1. **Execution:** the private runner initiates an outbound connection to GitHub
-   and receives eligible deployment jobs. PR builds run on GitHub-hosted runners,
-   not this VM. GitHub does not need an inbound connection to your VNet.
-2. **Authentication:** a trusted deployment job obtains a short-lived GitHub OIDC
-   token. Entra validates the repository/environment-specific federation for the
-   selected identity, allowing Azure sign-in and an Entra token for SQL. The
-   identity's contained SQL user and explicit grants authorize the deployment.
-   No Azure client secret or SQL password is stored by setup.
-3. **SQL connectivity:** the runner resolves the SQL hostname through private
-   DNS and connects through the private endpoint. SQL public network access is
-   disabled, Entra-only authentication is enabled, and minimum TLS is 1.2.
-   NAT enables outbound service access; it does not carry the private SQL path.
-
-OIDC does not provide network connectivity, and a private endpoint does not
-grant database permissions. Both paths must work. An ordinary laptop outside
-the connected private network cannot reach SQL merely by signing into Azure;
-do not enable public access just to make a demonstration work.
+OIDC is not network access; a private endpoint is not database authorization.
+A laptop outside the connected network cannot reach SQL just by signing in.
+Do not enable public access for a demonstration. The setup operator's broader
+permissions are explained in [guided setup](SETUP.md#initial-setup-permissions-versus-routine-releases).
 
 ## A 10-minute Azure Portal and GitHub walkthrough
 
@@ -108,12 +86,14 @@ Then show the following in **your own** deployment:
 
 | Stop | Where to look | What to explain or verify |
 |---|---|---|
-| 1. Overview | Resource group > Resources; group/filter by resource type | Identify database, identity, compute and network components using the table above. This is a database release foundation, not a deployed application frontend/API. |
-| 2. Database targets | SQL server > SQL databases | Show dev and prod separately; distinguish `master`. Confirm the configured tier rather than claiming production-grade availability. |
-| 3. SQL access controls | SQL server > Networking and Microsoft Entra settings | Show public access disabled, the approved private endpoint and Entra-only authentication. TLS minimum is 1.2. Portal labels can change. |
-| 4. Deployment trust | Each managed identity > Federated credentials | Explain separate dev/production trust bound to your GitHub repository and environment. These are deployment identities, not the setup administrator or VM identity. |
-| 5. Private execution/network | Runner VM > Networking; VNet > Subnets; runner NSG; private DNS zone | Show no VM public IP, the runner subnet's deny-inbound rule, outbound NAT, and the DNS zone's link to the VNet. Do not describe default outbound access as an egress allowlist. |
-| 6. Release evidence | Your private repository > Actions | Show a PR build with dev skipped, a successful main-branch dev deployment/smoke test, and production promotion. Compare the recorded source run, commit and exact artifact ID. |
+| 1. Overview | Resource group > Resources; group by type | Identify the resource layers. This is a release foundation, not an application frontend/API. |
+| 2. Targets | SQL server > SQL databases | Show dev/prod, distinguish `master`, and confirm the configured tier. |
+| 3. SQL controls | SQL server > Networking and Microsoft Entra settings | Show public access disabled, approved private endpoint, Entra-only authentication and TLS 1.2 minimum. |
+| 4. Trust | Managed identities > Federated credentials | Show separate repository/environment trust, not the setup administrator or VM identity. |
+| 5. Private network | VM > Networking; VNet/subnets; NSG; private DNS zone | Show no VM public IP, deny-inbound rule, NAT and DNS/VNet link. Outbound NAT is not an egress allowlist. |
+| 6. Release evidence | Your private repository > Actions | Show PR/dev/production results and compare source run, commit and exact artifact ID. |
+
+Portal labels can change; focus on the settings, not exact menu wording.
 
 Before sharing your screen, close local configuration/state/key files and
 unredacted setup logs. Show only approved resource details; identifiers are not
@@ -122,39 +102,30 @@ Never display access tokens, private keys or credentials.
 
 ### Read-only walkthrough or live release?
 
-- **Read-only:** the runner may remain deallocated. Portal configuration and
-  historical workflow results can be discussed without starting it. Historical
-  success is dated evidence, not proof of current runner or DNS health.
+- **Read-only:** the runner can stay deallocated; no start is needed. Historical
+  results are dated evidence, not current runner/DNS health.
 - **Live:** start the existing runner using the
   [runner lifecycle guidance](OPERATIONS.md#runner-lifecycle), and wait until
-  GitHub shows it idle/online before dispatching. Keep it running until every
-  deployment and verification job finishes. Do not rerun setup just to start it.
+  GitHub shows it idle/online. Keep it running until all jobs finish; no setup
+  rerun is needed just to start it.
 - **Promotion:** artifacts expire after 14 days. If the selected artifact
-  expired, produce a new successful main-branch dev release and promote that
-  run. Never rebuild a separate production artifact. See
+  expired, create a new successful main-branch dev release, not a separate
+  production build. See
   [production promotion](OPERATIONS.md#production-promotion).
 
-Use your own passing run links and the
-[quick-start completion checklist](../README.md#completion-checklist), not the
-maintainer's private trial evidence, as proof for your demonstration.
+Use your own [validation results](VALIDATION.md), not maintainer trial links.
 
 ## What this starter does not promise
 
-The two databases share a logical server, private network and persistent runner.
-Separate identities/databases are not independent infrastructure or strong
-dev/production compute isolation. The Basic tiers and local backup redundancy
-are starter choices, not a highly available production design.
+Dev/prod share a server, network and persistent runner; identities/databases are
+not strong infrastructure isolation. Basic tiers and local backup redundancy
+are not a highly available production design.
 
-The preview does not configure SQL auditing/retention, threat detection alerts,
-additional VM host encryption, or a full operational monitoring/recovery
-solution. Review the [security policy and exact preview exceptions](../SECURITY.md),
-then choose production tiers, isolation, auditing, monitoring, recovery and
-governance controls appropriate to the workload. Manual production dispatch is
-not two-person approval; configure reviewers and protect the adopter's `main`.
-The source repository's protection settings are not copied by template creation.
+Review the [security exceptions](../SECURITY.md#infrastructure-preview-exceptions)
+and choose appropriate auditing, monitoring, recovery, isolation and database
+tiers. Protect your own `main` and configure production reviewers: manual dispatch
+is not two-person approval, and source protection settings are not copied.
 
-For ongoing use, follow [releases and operations](OPERATIONS.md), the remaining
-[acceptance checks](VALIDATION.md#fresh-repository-acceptance-separate-azure-environment),
-and [cost/cleanup guidance](COST-AND-CLEANUP.md). VM deallocation stops compute
-billing, not SQL, disk or networking charges. Cleanup is destructive and must
-target only the dedicated adopter-owned resource group.
+Next: [Validate your deployment](VALIDATION.md), [operations](OPERATIONS.md) and
+[cost/cleanup](COST-AND-CLEANUP.md). Deallocation leaves SQL/disk/network charges;
+cleanup is destructive and only for the dedicated adopter-owned group.

@@ -1,5 +1,8 @@
 # Cost and cleanup
 
+Choose between keeping the environment, deallocating its runner, or permanently
+removing it. Deallocation reduces cost; it does not remove the deployment.
+
 ## Cost before applying
 
 The topology creates **two Basic SQL databases, one Ubuntu VM with an OS disk,
@@ -8,11 +11,11 @@ VNet/NSG/managed identities are also provisioned. A private network is not free.
 
 ### Dated starter estimate: November 9, 2026
 
-The isolated West US 2 adoption environment was checked against Microsoft's
+For the starter's West US 2 sizing, plan **USD 120-130/month continuously running**
+or **USD 56-65/month with the runner deallocated all month**. This dated estimate
+was checked against Microsoft's
 [Azure Retail Prices API](https://learn.microsoft.com/en-us/rest/api/cost-management/retail-prices/azure-retail-prices).
-For that sizing, budget approximately **USD 120-130/month continuously running**
-or **USD 56-65/month with the runner VM deallocated for the whole month**.
-These are planning ranges, not a billing guarantee or a promise of future rates.
+It is not a spending cap, billing guarantee or promise of future rates.
 
 | Resource | Monthly fixed-cost estimate (USD) |
 |---|---:|
@@ -34,17 +37,19 @@ usage can add charges. Different regions/SKUs, security tooling and other
 resource groups are outside this estimate. GitHub plans, storage and
 hosted-runner minutes may incur separate GitHub charges.
 
-Deallocating the VM removes about **USD 60.74/month** of compute if it stays
-deallocated all month, leaving a fixed-cost floor of about **USD 55.63/month**.
-Starting it for demos adds approximately $0.0832 per running hour. The runner
-must be online for deployments; do not deallocate it during an active workflow.
-Confirm **Stopped (deallocated)** rather than merely shutting down Linux;
+### Reduce cost between releases
+
+Use [runner lifecycle](OPERATIONS.md#runner-lifecycle) to deallocate after all
+jobs finish. This estimate removes about **USD 60.74/month** of compute if the
+VM stays deallocated all month, leaving a fixed-cost floor of **USD 55.63/month**.
+Running the VM adds approximately $0.0832/hour. Confirm **Stopped (deallocated)**,
+not just a Linux shutdown;
 [allocated stopped VMs remain compute-billed](https://learn.microsoft.com/en-us/azure/virtual-machines/states-billing).
 SQL, disk, NAT, public IP, private endpoint and DNS charges continue.
 
-Keeping only the GitHub repository does not require Azure hosting. Each
-separately provisioned customer environment incurs its own Azure costs; multiple
-people viewing one reference environment do not multiply its fixed charges.
+Keeping only the GitHub repository requires no Azure hosting. Separate
+deployments each incur costs; viewers of one reference environment do not
+multiply its fixed charges.
 
 Check [Azure Pricing Calculator](https://azure.microsoft.com/en-us/pricing/calculator/)
 for your selected region/SKU and establish an Azure budget/alert before `-Apply`.
@@ -53,34 +58,43 @@ No Azure resources are created by local validation or repository creation.
 
 ## Isolated cleanup
 
-Export any data you need. Delete only the dedicated adopter-owned resource
-group, never a baseline/shared group. Preview first:
+**Cleanup permanently deletes the group's data and resources**, including ones
+added after setup. Target only your dedicated adopter-owned group, never a
+baseline/shared group. Export needed data and finish all release jobs first.
+
+1. Preview and check the displayed subscription, group and resource inventory:
 
 ```powershell
 .\scripts\Remove-Accelerator.ps1 -ConfigurationPath config\setup.json
-# DESTRUCTIVE: permanently deletes ALL data/resources in that group:
+```
+
+2. Only after confirming the target, apply:
+
+```powershell
 .\scripts\Remove-Accelerator.ps1 -ConfigurationPath config\setup.json -Apply
 ```
 
-Cleanup verifies both ownership tags, disables releases, refuses a busy runner,
-and records its exact runner IDs in the ignored local setup state. It deletes the
-dedicated Azure group and confirms it is absent **before** removing those runner
-registrations. If Azure deletion fails, the registrations remain usable.
-Review the displayed inventory: all
-resources in the owned group, including ones added later, will be deleted.
+Cleanup checks ownership tags, disables releases, and refuses active releases
+or a busy runner. It records exact runner IDs in local state, deletes the Azure
+group, confirms it is gone, then removes those runner registrations.
 
-The GitHub repository, environments, variables and custom OIDC subject policy
-are retained. OIDC federation/identities disappear with the resource group.
-If GitHub runner removal fails after Azure deletion, fix the reported error and
-rerun the same cleanup command with `-Apply`. The saved checkpoint lets it finish
-registration cleanup even though the Azure group is already absent. Retry targets
-recorded IDs, not a replacement runner with the same name, and refuses mismatched
-repository/deployment state.
+| Removed | Retained |
+|---|---|
+| Group and all its Azure resources/data, including identities/federation; recorded runner registrations | GitHub repository, environments, variables, OIDC subject customization and local recovery state. Release gates remain disabled after successful cleanup. |
 
-If no checkpoint exists and a matching runner remains, cleanup refuses to guess
-ownership; inspect that registration manually. If both the group and matching
-runner are already absent, cleanup returns without changing GitHub settings.
-Disable release variables manually if deletion happened outside this script.
+### If cleanup fails
+
+- **Azure deletion fails:** runner registrations remain usable. Fix the error,
+  keep local state and rerun the same cleanup command with `-Apply`.
+- **Azure is gone but runner removal fails:** keep the saved checkpoint and
+  rerun with the same configuration. Cleanup uses recorded runner IDs, not a
+  replacement runner with the same name.
+- **Runner ownership cannot be proven:** cleanup refuses to guess. Inspect the
+  registration and original setup state; do not remove unrelated runners.
+
+If both group and matching runner are already absent, cleanup does not change
+GitHub settings. If resources were deleted outside the script, ensure release
+gates are disabled rather than assuming cleanup configured them.
 
 After cleanup, preserve local state if you may reprovision with the same
 configuration. To adopt elsewhere, use a separate fresh checkout and a new
