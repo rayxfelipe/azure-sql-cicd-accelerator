@@ -20,9 +20,12 @@ owner-only request-file permissions, provisioning waits, exact protected paramet
 values and temporary-file cleanup, including simultaneous local/remote cleanup failures.
 
 For workflow syntax/expression validation, run [actionlint](https://github.com/rhysd/actionlint)
-against all three workflows. Optional infrastructure security scanners such as
-Checkov are not bundled; do not claim a security scan was performed just because
-Bicep compiled. SQL smoke/readiness scripts require an actual private Azure SQL
+against all workflows. The hosted **Publication checks** workflow separately
+installs pinned scanners and checks history, workflows and compiled infrastructure
+without Azure sign-in. Its [documented preview baseline](../SECURITY.md#infrastructure-preview-exceptions)
+is not a clean raw policy scan. Local validation does not install these scanners;
+do not claim a security scan was performed just because Bicep compiled.
+SQL smoke/readiness scripts require an actual private Azure SQL
 environment; local compilation does not execute those tests.
 
 ## Fresh-repository acceptance (separate Azure environment)
@@ -132,3 +135,36 @@ Verified November 2, 2026:
 | Checkov | Not installed; no Checkov scan is claimed. |
 | Live readiness (subsequent November 4 run) | Both OIDC and both private SQL readiness jobs passed; see the linked evidence above. |
 | Initial setup provisioning path / live DACPAC releases / end-to-end adoption | Not established by readiness alone. Complete the isolated customer walkthrough and record its actual release, rerun and cleanup evidence. |
+
+## Publication hardening: November 9, 2026
+
+The distribution repository was detached from deployment: its setup gate is
+false, its runner was unregistered, its environment deployment variables were
+removed, and its readiness/promotion workflows were disabled. Only the two
+source-owned Azure federations were revoked. No Azure resource group, VM,
+database or identity was deleted; retained resources can still incur charges.
+The successful trial repository and its deployment trust were preserved.
+These source settings are not automatically copied to template-created repositories.
+
+| Check | Result / boundary |
+|---|---|
+| `.\scripts\Test-Accelerator.ps1` | Passed all 99 regressions, PowerShell/SQL/JSON checks, DACPAC build with zero warnings/errors, and Bicep/private-topology checks. |
+| `actionlint` 1.7.12 | All four workflows passed after immutable Node 24 Action upgrades. |
+| `gitleaks git . --log-opts=--all --redact --no-banner` 8.30.1 | All 14 pre-hardening commits passed. The staged hardening content is scanned separately before commit, and hosted checks scan the resulting complete history. |
+| Changed documentation | Relative file/heading links and PowerShell examples passed. |
+| Checkov 3.4.3, raw ARM | 16 passed, 10 failed, zero skipped/parsing errors, 18 resource expressions. Not a clean policy scan. |
+| Checkov with reviewed baseline | Zero new failures, ten explicitly skipped findings, zero parsing errors, 18 resource expressions. See the [exact preview dispositions](../SECURITY.md#infrastructure-preview-exceptions). |
+| Negative policy probe | Changing only the compiled SQL TLS minimum to `1.0` produced non-baselined `CKV_AZURE_52` and exit 1. The source template was not changed. |
+| NuGet package audit | The SQL MSBuild SDK exposes no ordinary PackageReference graph. Public-feed auditing also hit a local TLS handshake error; this is not clean SDK/bundled-library dependency evidence. Hosted auditing explicitly reports the coverage gap. |
+| Dependency maintenance | Weekly Dependabot Action updates, immutable Action commits, read-only default workflow token and vulnerability alerts; vendor/bundled-tool advisory review remains necessary. |
+
+The preview release notes record the exact hosted checks used for tagging.
+Build and publication checks must pass, with source `deploy-dev` skipped.
+Hosted compilation/scanning does not repeat the successful Azure walkthrough
+using the newly upgraded deployment Actions.
+
+Before wider customer use, complete the remaining setup-rerun, VM recovery,
+live negative-promotion and cleanup/recreation acceptance checks in a disposable
+environment. Review the documented infrastructure exceptions and bundled-tool
+dependencies against the intended customer security policy. The repository
+remains private until a separate publication decision; a preview tag is not GA.

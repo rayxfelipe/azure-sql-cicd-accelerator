@@ -20,21 +20,55 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
       - name: Validate accelerator and build SQL project
         shell: pwsh
         run: ./scripts/Test-Accelerator.ps1
+      - name: Audit NuGet package references
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $report = dotnet list database/Database.sqlproj package --vulnerable --include-transitive --format json --source https://api.nuget.org/v3/index.json
+          $audit = ($report -join "`n") | ConvertFrom-Json
+          if ($audit.problems -or $audit.projects.Count -eq 0) {
+            throw 'NuGet did not return a usable package audit. Inspect the audit output.'
+          }
+          $packages = @(
+            foreach ($project in $audit.projects) {
+              if (-not $project.PSObject.Properties['frameworks']) { continue }
+              foreach ($framework in $project.frameworks) {
+                $framework.topLevelPackages
+                $framework.transitivePackages
+              }
+            }
+          )
+          $findings = @($packages | Where-Object { $_ -and $_.vulnerabilities.Count -gt 0 })
+          if ($findings.Count -gt 0) {
+            $findings | ConvertTo-Json -Depth 10
+            throw 'NuGet reported vulnerable package references.'
+          }
+          if ($packages.Count -eq 0) {
+            Write-Warning 'The SQL SDK project exposes no PackageReference graph; SDK-bundled dependencies were not audited.'
+            'No PackageReference graph was exposed by the SQL SDK project. SDK-bundled dependencies were not audited; see SECURITY.md.' >> $env:GITHUB_STEP_SUMMARY
+          }
+          else {
+            'NuGet reported no vulnerable PackageReference dependencies. This does not audit SDK-bundled tools; see SECURITY.md.' >> $env:GITHUB_STEP_SUMMARY
+          }
       - name: Package immutable release
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path package
           Copy-Item database/bin/Release/Database.dacpac package/
           Copy-Item scripts,tests -Destination package -Recurse
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: database-release
           path: package
@@ -57,7 +91,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: database-release
           path: package
@@ -67,7 +101,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           dotnet tool install microsoft.sqlpackage --version 170.4.83 --tool-path (Join-Path $env:RUNNER_TEMP 'sqlpackage')
-      - uses: azure/login@v2
+      - uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}

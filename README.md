@@ -4,6 +4,11 @@ A private-network-first GitHub template for passwordless Azure SQL releases.
 Start from a new private repository, run guided setup, and deploy reviewed SQL
 changes through GitHub Actions. No SQL passwords or client secrets.
 
+**Preview:** use isolated resources and synthetic data. Review the
+[security policy and documented infrastructure exceptions](SECURITY.md) before
+adoption. The distribution repository is build-only; Azure releases belong in
+your own private deployment repository.
+
 ## Architecture
 
 ```text
@@ -431,6 +436,7 @@ including any configured production approval.
 - [Releases, permissions and operations](docs/OPERATIONS.md)
 - [Costs and isolated cleanup](docs/COST-AND-CLEANUP.md)
 - [Validation and fresh-repository acceptance](docs/VALIDATION.md)
+- [Security policy and preview exceptions](SECURITY.md)
 - [MIT license](LICENSE)
 
 Local validation (does not deploy anything):
@@ -451,6 +457,8 @@ not a replacement for that baseline. Its historical deployment evidence is
 fresh-repository Windows walkthrough subsequently passed setup, dev deployment,
 a schema-change PR and same-artifact production promotion; see the
 [dated acceptance evidence and remaining checks](docs/VALIDATION.md#fresh-repository-walkthrough-november-9-2026).
+That live walkthrough predates the subsequent pinned Action upgrades; hosted
+builds and static checks do not replace a new Azure acceptance run after upgrades.
 
 Version 1 supports **GitHub.com private repositories and Azure public cloud**,
 fixed `dev`/`production` environment names, Ubuntu 24.04 x64 and one persistent
