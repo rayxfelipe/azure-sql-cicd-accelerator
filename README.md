@@ -345,6 +345,10 @@ The first checkbox means setup is ready for releases. **All five** mean the
 end-to-end happy-path walkthrough passed, not that every production-hardening
 or recovery check is complete.
 
+Next, read [Understand your deployment](docs/DEPLOYMENT-OUTCOME.md) to identify
+the Azure resources, explain how they connect, and walk through your environment
+in Azure Portal and GitHub.
+
 ### When you finish
 
 Keep the resources for further testing, or follow
@@ -434,6 +438,7 @@ including any configured production approval.
 ## Working with the accelerator
 
 - [Setup and reruns](docs/SETUP.md)
+- [Understand your deployment](docs/DEPLOYMENT-OUTCOME.md)
 - [Releases, permissions and operations](docs/OPERATIONS.md)
 - [Costs and isolated cleanup](docs/COST-AND-CLEANUP.md)
 - [Validation and fresh-repository acceptance](docs/VALIDATION.md)
