@@ -166,5 +166,36 @@ using the newly upgraded deployment Actions.
 Before wider customer use, complete the remaining setup-rerun, VM recovery,
 live negative-promotion and cleanup/recreation acceptance checks in a disposable
 environment. Review the documented infrastructure exceptions and bundled-tool
-dependencies against the intended customer security policy. The repository
-remains private until a separate publication decision; a preview tag is not GA.
+dependencies against the intended customer security policy. At tagging, the
+repository remained private pending a separate publication decision; that
+decision and its checks are recorded below. A preview tag is not GA.
+
+## Public distribution: November 9, 2026
+
+The maintainer explicitly authorized public visibility after an exposure review.
+Local redacted Gitleaks checks covered all Git refs, a tracked-source snapshot,
+all seven retained workflow logs and all four release artifacts, including
+unpacked DACPAC contents. No credentials were found. Targeted history/archive
+checks found no known real Azure tenant, subscription or client IDs outside one
+old readiness run's logs.
+
+That log contained actual Azure identifiers and infrastructure names, not
+authentication secrets. Before changing visibility, only the logs for readiness
+run `41915540588` were deleted and verified inaccessible; its successful run
+metadata was retained. Older readiness links therefore no longer provide logs.
+GitHub run/repository/artifact IDs, synthetic fixtures and private trial evidence
+links are intentional references, not deployment credentials.
+
+The source is now public and `main` protection is enabled: required PRs, strict
+successful `build`/`security` checks bound to GitHub Actions, resolved
+conversations, administrator enforcement, and no force pushes/deletion.
+Zero mandatory approvals accommodate the sole maintainer, not two-person review.
+The earlier private-plan HTTP 403 protection blocker is resolved.
+
+Native secret scanning, push protection and private vulnerability reporting are
+enabled; all external contributors' workflow runs require maintainer approval.
+No open native secret-scanning alerts were returned at the initial check; this
+is not a guarantee of complete detection. Source deployment gates remain false,
+with zero registered runners and the readiness/promotion workflows disabled.
+No trial/baseline repository settings or Azure resources were changed by publication.
+The infrastructure exceptions and remaining acceptance checks above still apply.
