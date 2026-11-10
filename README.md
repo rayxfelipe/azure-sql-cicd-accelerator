@@ -439,9 +439,9 @@ including any configured production approval.
 
 - [Setup and reruns](docs/SETUP.md)
 - [Understand your deployment](docs/DEPLOYMENT-OUTCOME.md)
+- [Validate your deployment](docs/VALIDATION.md)
 - [Releases, permissions and operations](docs/OPERATIONS.md)
 - [Costs and isolated cleanup](docs/COST-AND-CLEANUP.md)
-- [Validation and fresh-repository acceptance](docs/VALIDATION.md)
 - [Security policy and preview exceptions](SECURITY.md)
 - [MIT license](LICENSE)
 
@@ -462,7 +462,7 @@ not a replacement for that baseline. Its historical deployment evidence is
 **not** proof that a fresh accelerator environment passed. A separate
 fresh-repository Windows walkthrough subsequently passed setup, dev deployment,
 a schema-change PR and same-artifact production promotion; see the
-[dated acceptance evidence and remaining checks](docs/VALIDATION.md#fresh-repository-walkthrough-november-9-2026).
+[tested scope and remaining checks](docs/VALIDATION.md#tested-scope-and-current-limits).
 That live walkthrough predates the subsequent pinned Action upgrades; hosted
 builds and static checks do not replace a new Azure acceptance run after upgrades.
 

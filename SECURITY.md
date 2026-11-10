@@ -29,7 +29,8 @@ managed operations or security support contract is provided.
 
 Local secret/history scans, workflow validation and infrastructure policy checks
 reduce risk but do not prove the absence of vulnerabilities. See the
-[validation record](docs/VALIDATION.md) for dated evidence and remaining gates.
+[deployment validation guide](docs/VALIDATION.md) for checks and remaining gates,
+and the [maintainer record](.github/MAINTAINER-VALIDATION.md) for dated evidence.
 Production approvals, stronger runner isolation, monitoring, recovery and
 appropriate database tiers remain adopter responsibilities.
 
